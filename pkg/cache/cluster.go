@@ -103,6 +103,8 @@ type ClusterCache interface {
 	GetManagedLiveObjs(targetObjs []*unstructured.Unstructured, isManaged func(r *Resource) bool) (map[kube.ResourceKey]*unstructured.Unstructured, error)
 	// GetClusterInfo returns cluster cache statistics
 	GetClusterInfo() ClusterInfo
+	// GetClusterInfoSnapshot returns cluster cache statistics instantly, not thread safe
+	GetClusterInfoSnapshot() ClusterInfo
 	// OnResourceUpdated register event handler that is executed every time when resource get's updated in the cache
 	OnResourceUpdated(handler OnResourceUpdatedHandler) Unsubscribe
 	// OnEvent register event handler that is executed every time when new K8S event received
@@ -620,30 +622,38 @@ func (c *clusterCache) processApi(client dynamic.Interface, api kube.APIResource
 func (c *clusterCache) sync() error {
 	c.log.Info("Start syncing cluster")
 
+	c.lock.Lock()
 	for i := range c.apisMeta {
 		c.apisMeta[i].watchCancel()
 	}
 	c.apisMeta = make(map[schema.GroupKind]*apiMeta)
 	c.resources = make(map[kube.ResourceKey]*Resource)
 	c.namespacedResources = make(map[schema.GroupKind]bool)
+	c.lock.Unlock()
 	config := c.config
 	version, err := c.kubectl.GetServerVersion(config)
 
 	if err != nil {
 		return err
 	}
+	c.lock.Lock()
 	c.serverVersion = version
+	c.lock.Unlock()
 	groups, err := c.kubectl.GetAPIGroups(config)
 	if err != nil {
+		c.lock.Lock()
 		return err
 	}
 	c.apiGroups = groups
+	c.lock.Unlock()
 
 	openAPISchema, err := c.kubectl.LoadOpenAPISchema(config)
 	if err != nil {
 		return err
 	}
+	c.lock.Lock()
 	c.openAPISchema = openAPISchema
+	c.lock.Unlock()
 
 	apis, err := c.kubectl.GetAPIResources(c.config, c.settings.ResourcesFilter)
 
@@ -661,8 +671,10 @@ func (c *clusterCache) sync() error {
 		lock.Lock()
 		ctx, cancel := context.WithCancel(context.Background())
 		info := &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel}
+		c.lock.Lock()
 		c.apisMeta[api.GroupKind] = info
 		c.namespacedResources[api.GroupKind] = api.Meta.Namespaced
+		c.lock.Unlock()
 		lock.Unlock()
 
 		return c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
@@ -709,8 +721,6 @@ func (c *clusterCache) EnsureSynced() error {
 	}
 	syncStatus.lock.Unlock() // release the lock, so that we can acquire the parent lock (see struct comment re: lock acquisition ordering)
 
-	c.lock.Lock()
-	defer c.lock.Unlock()
 	syncStatus.lock.Lock()
 	defer syncStatus.lock.Unlock()
 
@@ -963,6 +973,19 @@ func (c *clusterCache) GetClusterInfo() ClusterInfo {
 	c.syncStatus.lock.Lock()
 	defer c.syncStatus.lock.Unlock()
 
+	return ClusterInfo{
+		APIsCount:         len(c.apisMeta),
+		K8SVersion:        c.serverVersion,
+		ResourcesCount:    len(c.resources),
+		Server:            c.config.Host,
+		LastCacheSyncTime: c.syncStatus.syncTime,
+		SyncError:         c.syncStatus.syncError,
+		APIGroups:         c.apiGroups,
+	}
+}
+
+// GetClusterInfoSnapshot returns cluster cache statistics
+func (c *clusterCache) GetClusterInfoSnapshot() ClusterInfo {
 	return ClusterInfo{
 		APIsCount:         len(c.apisMeta),
 		K8SVersion:        c.serverVersion,
