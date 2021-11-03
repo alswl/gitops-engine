@@ -641,9 +641,9 @@ func (c *clusterCache) sync() error {
 	c.lock.Unlock()
 	groups, err := c.kubectl.GetAPIGroups(config)
 	if err != nil {
-		c.lock.Lock()
 		return err
 	}
+	c.lock.Lock()
 	c.apiGroups = groups
 	c.lock.Unlock()
 
