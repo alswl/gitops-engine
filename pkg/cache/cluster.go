@@ -443,13 +443,13 @@ func runSynced(lock sync.Locker, action func() error) error {
 
 // listResources creates list pager and enforces number of concurrent list requests
 func (c *clusterCache) listResources(ctx context.Context, resClient dynamic.ResourceInterface, callback func(*pager.ListPager) error) (string, error) {
-	//if err := c.listSemaphore.Acquire(ctx, 1); err != nil {
-	//	return "", err
-	//}
-	//defer c.listSemaphore.Release(1)
 	resourceVersion := ""
 	listPager := pager.New(func(ctx context.Context, opts metav1.ListOptions) (runtime.Object, error) {
+		if err := c.listSemaphore.Acquire(ctx, 1); err != nil {
+			return nil, err
+		}
 		res, err := resClient.List(ctx, opts)
+		c.listSemaphore.Release(1)
 		if err == nil {
 			resourceVersion = res.GetResourceVersion()
 		}
@@ -473,9 +473,6 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 		if resourceVersion == "" {
 			resourceVersion, err = c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
 				var items []*Resource
-				if err := c.listSemaphore.Acquire(ctx, 1); err != nil {
-					return err
-				}
 				err = listPager.EachListItem(ctx, metav1.ListOptions{}, func(obj runtime.Object) error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
 						return fmt.Errorf("object %s/%s has an unexpected type", un.GroupVersionKind().String(), un.GetName())
@@ -484,7 +481,6 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 					}
 					return nil
 				})
-				c.listSemaphore.Release(1)
 
 				if err != nil {
 					return fmt.Errorf("failed to load initial state of resource %s: %v", api.GroupKind.String(), err)
