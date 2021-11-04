@@ -179,7 +179,9 @@ type clusterCache struct {
 	populateResourceInfoHandler OnPopulateResourceInfoHandler
 	resourceUpdatedHandlers     map[uint64]OnResourceUpdatedHandler
 	eventHandlers               map[uint64]OnEventHandler
-	openAPISchema               openapi.Resources
+
+	openAPISchemaLock sync.Mutex
+	openAPISchema     openapi.Resources
 }
 
 type clusterCacheSync struct {
@@ -336,6 +338,7 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 	return resource
 }
 
+// setNode is not thread-safe
 func (c *clusterCache) setNode(n *Resource) {
 	key := n.ResourceKey()
 	c.resources[key] = n
@@ -414,6 +417,7 @@ func (c *clusterCache) startMissingWatches() error {
 	if err != nil {
 		return err
 	}
+	c.lock.Lock()
 	namespacedResources := make(map[schema.GroupKind]bool)
 	for i := range apis {
 		api := apis[i]
@@ -432,13 +436,8 @@ func (c *clusterCache) startMissingWatches() error {
 		}
 	}
 	c.namespacedResources = namespacedResources
+	c.lock.Unlock()
 	return nil
-}
-
-func runSynced(lock sync.Locker, action func() error) error {
-	lock.Lock()
-	defer lock.Unlock()
-	return action()
 }
 
 // listResources creates list pager and enforces number of concurrent list requests
@@ -486,10 +485,8 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 					return fmt.Errorf("failed to load initial state of resource %s: %v", api.GroupKind.String(), err)
 				}
 
-				return runSynced(&c.lock, func() error {
-					c.replaceResourceCache(api.GroupKind, items, ns)
-					return nil
-				})
+				c.replaceResourceCache(api.GroupKind, items, ns)
+				return nil
 			})
 
 			if err != nil {
@@ -576,21 +573,18 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 						if event.Type == watch.Added && nameOK && nameErr == nil {
 							c.appendAPIGroups(apiGroup)
 						}
-						err = runSynced(&c.lock, func() error {
-							return c.startMissingWatches()
-						})
+						err = c.startMissingWatches()
 						if err != nil {
 							c.log.Error(err, "Failed to start missing watch")
 						}
 					}
-					err = runSynced(&c.lock, func() error {
-						openAPISchema, err := c.kubectl.LoadOpenAPISchema(c.config)
-						if err != nil {
-							return err
-						}
-						c.openAPISchema = openAPISchema
-						return nil
-					})
+					c.openAPISchemaLock.Lock()
+					openAPISchema, err := c.kubectl.LoadOpenAPISchema(c.config)
+					if err != nil {
+						return err
+					}
+					c.openAPISchema = openAPISchema
+					c.openAPISchemaLock.Unlock()
 					if err != nil {
 						c.log.Error(err, "Failed to reload open api schema")
 					}
@@ -926,13 +920,20 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 }
 
 func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
+	// thread safe now
+	c.lock.Lock()
 	c.setNode(newRes)
+	c.lock.Unlock()
+	c.lock.RLock()
 	for _, h := range c.getResourceUpdatedHandlers() {
 		h(newRes, oldRes, c.nsIndex[newRes.Ref.Namespace])
 	}
+	c.lock.RUnlock()
 }
 
 func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
+	// thread safe now
+	c.lock.Lock()
 	existing, ok := c.resources[key]
 	if ok {
 		delete(c.resources, key)
@@ -955,6 +956,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			h(nil, existing, ns)
 		}
 	}
+	c.lock.Unlock()
 }
 
 var (
