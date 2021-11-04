@@ -907,9 +907,9 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 		return
 	}
 
-	//c.lock.Lock()
-	//defer c.lock.Unlock()
+	c.lock.RLock()
 	existingNode, exists := c.resources[key]
+	c.lock.RUnlock()
 	if event == watch.Deleted {
 		if exists {
 			c.onNodeRemoved(key)
