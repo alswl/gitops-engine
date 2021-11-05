@@ -122,7 +122,7 @@ func NewClusterCache(config *rest.Config, opts ...UpdateSettingsFunc) *clusterCa
 	log := klogr.New()
 	cache := &clusterCache{
 		settings:           Settings{ResourceHealthOverride: &noopSettings{}, ResourcesFilter: &noopSettings{}},
-		apisMeta:           make(map[schema.GroupKind]*apiMeta),
+		apisMeta:           ApisMetaMap{},
 		listPageSize:       defaultListPageSize,
 		listPageBufferSize: defaultListPageBufferSize,
 		listSemaphore:      semaphore.NewWeighted(defaultListSemaphoreWeight),
@@ -150,7 +150,7 @@ func NewClusterCache(config *rest.Config, opts ...UpdateSettingsFunc) *clusterCa
 type clusterCache struct {
 	syncStatus clusterCacheSync
 
-	apisMeta      map[schema.GroupKind]*apiMeta
+	apisMeta      ApisMetaMap
 	serverVersion string
 	apiGroups     []metav1.APIGroup
 	// namespacedResources is a simple map which indicates a groupKind is namespaced
@@ -284,7 +284,9 @@ func (c *clusterCache) DeleteAPIGroup(apiGroup metav1.APIGroup) {
 	}
 }
 
+// replaceResourceCache is thread-safe
 func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Resource, ns string) {
+	c.lock.Lock()
 	objByKey := make(map[kube.ResourceKey]*Resource)
 	for i := range resources {
 		objByKey[resources[i].ResourceKey()] = resources[i]
@@ -308,6 +310,7 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 			c.onNodeRemoved(key)
 		}
 	}
+	c.lock.Unlock()
 }
 
 func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
@@ -372,13 +375,14 @@ func (c *clusterCache) Invalidate(opts ...UpdateSettingsFunc) {
 	c.syncStatus.syncTime = nil
 	c.syncStatus.lock.Unlock()
 
-	for i := range c.apisMeta {
-		c.apisMeta[i].watchCancel()
-	}
+	c.apisMeta.Range(func(key schema.GroupKind, value *apiMeta) bool {
+		value.watchCancel()
+		return true
+	})
 	for i := range opts {
 		opts[i](c)
 	}
-	c.apisMeta = nil
+	c.apisMeta = ApisMetaMap{}
 	c.namespacedResources = nil
 	c.log.Info("Invalidated cluster")
 }
@@ -397,14 +401,13 @@ func (syncStatus *clusterCacheSync) synced() bool {
 }
 
 func (c *clusterCache) stopWatching(gk schema.GroupKind, ns string) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	if info, ok := c.apisMeta[gk]; ok {
-		info.watchCancel()
-		delete(c.apisMeta, gk)
+	c.apisMeta.Range(func(key schema.GroupKind, value *apiMeta) bool {
+		value.watchCancel()
+		c.apisMeta.Delete(key)
 		c.replaceResourceCache(gk, nil, ns)
 		c.log.Info(fmt.Sprintf("Stop watching: %s not found", gk))
-	}
+		return true
+	})
 }
 
 // startMissingWatches lists supported cluster resources and start watching for changes unless watch is already running
@@ -422,9 +425,11 @@ func (c *clusterCache) startMissingWatches() error {
 	for i := range apis {
 		api := apis[i]
 		namespacedResources[api.GroupKind] = api.Meta.Namespaced
-		if _, ok := c.apisMeta[api.GroupKind]; !ok {
+		// protected by locked, equivalent to StoreIfMiss(fn)
+		_, ok := c.apisMeta.Load(api.GroupKind)
+		if !ok {
 			ctx, cancel := context.WithCancel(context.Background())
-			c.apisMeta[api.GroupKind] = &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel}
+			c.apisMeta.Store(api.GroupKind, &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel})
 
 			err = c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
 				go c.watchEvents(ctx, api, resClient, ns, "")
@@ -616,11 +621,12 @@ func (c *clusterCache) processApi(client dynamic.Interface, api kube.APIResource
 func (c *clusterCache) sync() error {
 	c.log.Info("Start syncing cluster")
 
+	c.apisMeta.Range(func(key schema.GroupKind, value *apiMeta) bool {
+		value.watchCancel()
+		return true
+	})
 	c.lock.Lock()
-	for i := range c.apisMeta {
-		c.apisMeta[i].watchCancel()
-	}
-	c.apisMeta = make(map[schema.GroupKind]*apiMeta)
+	c.apisMeta = ApisMetaMap{}
 	c.resources = make(map[kube.ResourceKey]*Resource)
 	c.namespacedResources = make(map[schema.GroupKind]bool)
 	c.lock.Unlock()
@@ -663,8 +669,8 @@ func (c *clusterCache) sync() error {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		info := &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel}
+		c.apisMeta.Store(api.GroupKind, info)
 		c.lock.Lock()
-		c.apisMeta[api.GroupKind] = info
 		c.namespacedResources[api.GroupKind] = api.Meta.Namespaced
 		c.lock.Unlock()
 
@@ -858,7 +864,7 @@ func (c *clusterCache) GetManagedLiveObjs(targetObjs []*unstructured.Unstructure
 						return err
 					}
 				}
-			} else if _, watched := c.apisMeta[key.GroupKind()]; !watched {
+			} else if _, watched := c.apisMeta.Load(key.GroupKind()); !watched {
 				var err error
 				managedObj, err = c.kubectl.GetResource(context.TODO(), c.config, targetObj.GroupVersionKind(), targetObj.GetName(), targetObj.GetNamespace())
 				if err != nil {
@@ -898,6 +904,7 @@ func (c *clusterCache) GetManagedLiveObjs(targetObjs []*unstructured.Unstructure
 	return managedObjs, nil
 }
 
+// processEvent is thread-safe now
 func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unstructured) {
 	for _, h := range c.getEventHandlers() {
 		h(event, un)
@@ -907,9 +914,8 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 		return
 	}
 
-	c.lock.RLock()
+	c.lock.Lock()
 	existingNode, exists := c.resources[key]
-	c.lock.RUnlock()
 	if event == watch.Deleted {
 		if exists {
 			c.onNodeRemoved(key)
@@ -917,23 +923,19 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 	} else if event != watch.Deleted {
 		c.onNodeUpdated(existingNode, c.newResource(un))
 	}
+	c.lock.Unlock()
 }
 
+// onNodeUpdated not thread safe now
 func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
-	// thread safe now
-	c.lock.Lock()
 	c.setNode(newRes)
-	c.lock.Unlock()
-	c.lock.RLock()
 	for _, h := range c.getResourceUpdatedHandlers() {
 		h(newRes, oldRes, c.nsIndex[newRes.Ref.Namespace])
 	}
-	c.lock.RUnlock()
 }
 
+// onNodeRemoved is not thread safe now
 func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
-	// thread safe now
-	c.lock.Lock()
 	existing, ok := c.resources[key]
 	if ok {
 		delete(c.resources, key)
@@ -956,7 +958,6 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			h(nil, existing, ns)
 		}
 	}
-	c.lock.Unlock()
 }
 
 var (
@@ -973,7 +974,7 @@ func (c *clusterCache) GetClusterInfo() ClusterInfo {
 	defer c.syncStatus.lock.Unlock()
 
 	return ClusterInfo{
-		APIsCount:         len(c.apisMeta),
+		APIsCount:         c.apisMeta.Len(),
 		K8SVersion:        c.serverVersion,
 		ResourcesCount:    len(c.resources),
 		Server:            c.config.Host,
@@ -986,7 +987,7 @@ func (c *clusterCache) GetClusterInfo() ClusterInfo {
 // GetClusterInfoSnapshot returns cluster cache statistics
 func (c *clusterCache) GetClusterInfoSnapshot() ClusterInfo {
 	return ClusterInfo{
-		APIsCount:         len(c.apisMeta),
+		APIsCount:         c.apisMeta.Len(),
 		K8SVersion:        c.serverVersion,
 		ResourcesCount:    len(c.resources),
 		Server:            c.config.Host,
