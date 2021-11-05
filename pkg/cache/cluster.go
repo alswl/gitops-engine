@@ -286,7 +286,6 @@ func (c *clusterCache) DeleteAPIGroup(apiGroup metav1.APIGroup) {
 
 // replaceResourceCache is thread-safe
 func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Resource, ns string) {
-	c.lock.Lock()
 	objByKey := make(map[kube.ResourceKey]*Resource)
 	for i := range resources {
 		objByKey[resources[i].ResourceKey()] = resources[i]
@@ -297,7 +296,9 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 		res := resources[i]
 		oldRes := c.resources[res.ResourceKey()]
 		if oldRes == nil || oldRes.ResourceVersion != res.ResourceVersion {
+			c.lock.Lock()
 			c.onNodeUpdated(oldRes, res)
+			c.lock.Unlock()
 		}
 	}
 
@@ -310,7 +311,6 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 			c.onNodeRemoved(key)
 		}
 	}
-	c.lock.Unlock()
 }
 
 func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
@@ -341,8 +341,9 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 	return resource
 }
 
-// setNode is not thread-safe
+// setNode is thread-safe
 func (c *clusterCache) setNode(n *Resource) {
+	c.lock.Lock()
 	key := n.ResourceKey()
 	c.resources[key] = n
 	ns, ok := c.nsIndex[key.Namespace]
@@ -364,6 +365,7 @@ func (c *clusterCache) setNode(n *Resource) {
 			}
 		}
 	}
+	c.lock.Unlock()
 }
 
 // Invalidate cache and executes callback that optionally might update cache settings
@@ -680,9 +682,7 @@ func (c *clusterCache) sync() error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
 						return fmt.Errorf("object %s/%s has an unexpected type", un.GroupVersionKind().String(), un.GetName())
 					} else {
-						c.lock.Lock()
 						c.setNode(c.newResource(un))
-						c.lock.Unlock()
 					}
 					return nil
 				})
@@ -914,7 +914,6 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 		return
 	}
 
-	c.lock.Lock()
 	existingNode, exists := c.resources[key]
 	if event == watch.Deleted {
 		if exists {
@@ -923,10 +922,9 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 	} else if event != watch.Deleted {
 		c.onNodeUpdated(existingNode, c.newResource(un))
 	}
-	c.lock.Unlock()
 }
 
-// onNodeUpdated not thread safe now
+// onNodeUpdated thread-safe, snapshot
 func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
 	c.setNode(newRes)
 	for _, h := range c.getResourceUpdatedHandlers() {
@@ -934,8 +932,9 @@ func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
 	}
 }
 
-// onNodeRemoved is not thread safe now
+// onNodeRemoved is thread safe now
 func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
+	c.lock.Lock()
 	existing, ok := c.resources[key]
 	if ok {
 		delete(c.resources, key)
@@ -958,6 +957,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			h(nil, existing, ns)
 		}
 	}
+	c.lock.Unlock()
 }
 
 var (
