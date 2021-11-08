@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/argoproj/gitops-engine/pkg/engine"
 	"github.com/argoproj/gitops-engine/pkg/sync"
 	"github.com/argoproj/gitops-engine/pkg/utils/kube"
+_ "net/http/pprof"
+
 )
 
 const (
@@ -120,11 +123,17 @@ func newCmd(log logr.Logger) *cobra.Command {
 				namespace, _, err = clientConfig.Namespace()
 				checkError(err, log)
 			}
-
 			var namespaces []string
 			if namespaced {
 				namespaces = []string{namespace}
 			}
+
+			runtime.SetBlockProfileRate(1)
+			runtime.SetMutexProfileFraction(1)
+			go func() {
+				log.Info("pprof", "err", http.ListenAndServe("localhost:6060", nil))
+			}()
+
 			clusterCache := cache.NewClusterCache(config,
 				cache.SetNamespaces(namespaces),
 				cache.SetLogr(log),
