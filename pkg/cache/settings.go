@@ -108,6 +108,16 @@ func SetResyncTimeout(timeout time.Duration) UpdateSettingsFunc {
 	}
 }
 
+// SetWatchResyncTimeout updates resources watch re-sync timeout
+func SetWatchResyncTimeout(timeout time.Duration) UpdateSettingsFunc {
+	return func(cache *clusterCache) {
+		cache.syncStatus.lock.Lock()
+		defer cache.syncStatus.lock.Unlock()
+
+		cache.syncStatus.watchResyncTimeout = timeout
+	}
+}
+
 // SetLogr sets the logger to use.
 func SetLogr(log logr.Logger) UpdateSettingsFunc {
 	return func(cache *clusterCache) {

@@ -137,8 +137,9 @@ func NewClusterCache(config *rest.Config, opts ...UpdateSettingsFunc) *clusterCa
 			Tracer: tracing.NopTracer{},
 		},
 		syncStatus: clusterCacheSync{
-			resyncTimeout: clusterResyncTimeout,
-			syncTime:      nil,
+			resyncTimeout:      clusterResyncTimeout,
+			watchResyncTimeout: watchResyncTimeout,
+			syncTime:           nil,
 		},
 		resourceUpdatedHandlers: map[uint64]OnResourceUpdatedHandler{},
 		eventHandlers:           map[uint64]OnEventHandler{},
@@ -193,10 +194,11 @@ type clusterCacheSync struct {
 	// 1) 'lock' mutex should be acquired when reading/writing from fields of this struct.
 	// 2) The parent 'clusterCache.lock' does NOT need to be owned to r/w from fields of this struct (if it is owned, that is fine, but see below)
 	// 3) To prevent deadlocks, do not acquire parent 'clusterCache.lock' after acquiring this lock; if you need both locks, always acquire the parent lock first
-	lock          sync.Mutex
-	syncTime      *time.Time
-	syncError     error
-	resyncTimeout time.Duration
+	lock               sync.Mutex
+	syncTime           *time.Time
+	syncError          error
+	resyncTimeout      time.Duration
+	watchResyncTimeout time.Duration
 }
 
 // OnResourceUpdated register event handler that is executed every time when resource get's updated in the cache
@@ -497,7 +499,7 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 			resourceVersion = ""
 		}()
 
-		shouldResync := time.NewTimer(watchResyncTimeout)
+		shouldResync := time.NewTimer(c.syncStatus.watchResyncTimeout)
 		defer shouldResync.Stop()
 
 		for {
