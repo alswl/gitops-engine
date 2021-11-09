@@ -932,6 +932,8 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 	existing, ok := c.resources.LoadAndDelete(key)
 	if ok {
 		ns, ok := c.nsIndex.LoadAndDelete(key.Namespace)
+		// delete in ok will cause ns inner data to be removed
+		nsAllSnapshot := ns.All()
 		if ok {
 			if ns.Len() == 0 {
 				c.nsIndex.Delete(key.Namespace)
@@ -947,7 +949,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			}
 		}
 		for _, h := range c.getResourceUpdatedHandlers() {
-			h(nil, existing, ns.All())
+			h(nil, existing, nsAllSnapshot)
 		}
 	}
 }
