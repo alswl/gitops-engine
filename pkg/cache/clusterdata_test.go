@@ -16,3 +16,12 @@ func TestGroupKindBoolMap_Reload(t *testing.T) {
 
 	assert.Equal(t, 1, m.Len())
 }
+
+func TestNamespaceResourcesMap_LoadAndDelete(t *testing.T) {
+	m := NamespaceResourcesMap{}
+	m.Store("a", &ResourceMap{})
+	m.Store("b", &ResourceMap{})
+	existed, _ := m.LoadAndDelete("a")
+	assert.NotNil(t, existed)
+	assert.NotNil(t, existed.All())
+}

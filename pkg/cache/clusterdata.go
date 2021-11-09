@@ -241,7 +241,7 @@ func (m *NamespaceResourcesMap) LoadOrStore(key string, val *ResourceMap) (*Reso
 	return typedVal, true
 }
 
-func (m *NamespaceResourcesMap) Store(key string, resource *Resource) {
+func (m *NamespaceResourcesMap) Store(key string, resource *ResourceMap) {
 	m.syncMap.Store(key, resource)
 }
 

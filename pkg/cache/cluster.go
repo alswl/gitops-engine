@@ -358,6 +358,7 @@ func (c *clusterCache) Invalidate(opts ...UpdateSettingsFunc) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	// TODO update syncStatus refactor to function
 	c.syncStatus.lock.Lock()
 	c.syncStatus.syncTime = nil
 	c.syncStatus.lock.Unlock()
@@ -720,10 +721,11 @@ func (c *clusterCache) EnsureSynced() error {
 	}
 	err := c.sync()
 	syncTime := time.Now()
-	c.lock.Lock()
+	// TODO update syncStatus refactor to function
+	syncStatus.lock.Lock()
 	syncStatus.syncTime = &syncTime
 	syncStatus.syncError = err
-	c.lock.Unlock()
+	syncStatus.lock.Unlock()
 	return syncStatus.syncError
 }
 
@@ -797,7 +799,6 @@ func (c *clusterCache) IterateHierarchy(key kube.ResourceKey, action func(resour
 
 // IsNamespaced answers if specified group/kind is a namespaced resource API or not
 func (c *clusterCache) IsNamespaced(gk schema.GroupKind) (bool, error) {
-
 	if isNamespaced, ok := c.namespacedResources.Load(gk); ok {
 		return isNamespaced, nil
 	}
@@ -838,7 +839,9 @@ func (c *clusterCache) GetManagedLiveObjs(targetObjs []*unstructured.Unstructure
 	err := kube.RunAllAsync(len(targetObjs), func(i int) error {
 		targetObj := targetObjs[i]
 		key := kube.GetResourceKey(targetObj)
+		lock.Lock()
 		managedObj := managedObjs[key]
+		lock.Unlock()
 
 		if managedObj == nil {
 
@@ -932,6 +935,8 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 	existing, ok := c.resources.LoadAndDelete(key)
 	if ok {
 		ns, ok := c.nsIndex.LoadAndDelete(key.Namespace)
+		// delete in ok will cause ns inner data to be removed
+		nsAllSnapshot := ns.All()
 		if ok {
 			if ns.Len() == 0 {
 				c.nsIndex.Delete(key.Namespace)
@@ -947,7 +952,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			}
 		}
 		for _, h := range c.getResourceUpdatedHandlers() {
-			h(nil, existing, ns.All())
+			h(nil, existing, nsAllSnapshot)
 		}
 	}
 }
