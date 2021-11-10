@@ -270,16 +270,6 @@ func (m *NamespaceResourcesMap) Len() int {
 	return length
 }
 
-func (m *NamespaceResourcesMap) LoadAndDelete(namespace string) (*ResourceMap, bool) {
-	val, ok := m.syncMap.Load(namespace)
-	typedVal, typeOk := val.(*ResourceMap)
-	if !ok || !typeOk {
-		return nil, false
-	}
-	m.syncMap.Delete(namespace)
-	return typedVal, true
-}
-
 // GroupKindBoolMap is thread-safe map of schema.GroupKind to bool
 type GroupKindBoolMap struct {
 	log     logr.Logger

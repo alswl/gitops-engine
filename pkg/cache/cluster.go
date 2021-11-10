@@ -722,10 +722,8 @@ func (c *clusterCache) EnsureSynced() error {
 	err := c.sync()
 	syncTime := time.Now()
 	// TODO update syncStatus refactor to function
-	syncStatus.lock.Lock()
 	syncStatus.syncTime = &syncTime
 	syncStatus.syncError = err
-	syncStatus.lock.Unlock()
 	return syncStatus.syncError
 }
 
@@ -762,39 +760,41 @@ func (c *clusterCache) FindResources(namespace string, predicates ...func(r *Res
 
 // IterateHierarchy iterates resource tree starting from the specified top level resource and executes callback for each resource in the tree
 func (c *clusterCache) IterateHierarchy(key kube.ResourceKey, action func(resource *Resource, namespaceResources map[kube.ResourceKey]*Resource)) {
-	c.resources.Range(func(k kube.ResourceKey, res *Resource) bool {
-		nsNodes, _ := c.nsIndex.Load(key.Namespace)
-		action(res, nsNodes.All())
-		childrenByUID := make(map[types.UID][]*Resource)
-		nsNodes.Range(func(_ kube.ResourceKey, child *Resource) bool {
-			if res.isParentOf(child) {
-				childrenByUID[child.Ref.UID] = append(childrenByUID[child.Ref.UID], child)
-			}
-			return true
-		})
-		// make sure children has no duplicates
-		for _, children := range childrenByUID {
-			if len(children) > 0 {
-				// The object might have multiple children with the same UID (e.g. replicaset from apps and extensions group). It is ok to pick any object but we need to make sure
-				// we pick the same child after every refresh.
-				sort.Slice(children, func(i, j int) bool {
-					key1 := children[i].ResourceKey()
-					key2 := children[j].ResourceKey()
-					return strings.Compare(key1.String(), key2.String()) < 0
-				})
-				child := children[0]
-				action(child, nsNodes.All())
-				child.iterateChildren(nsNodes.All(), map[kube.ResourceKey]bool{res.ResourceKey(): true}, func(err error, child *Resource, namespaceResources map[kube.ResourceKey]*Resource) {
-					if err != nil {
-						c.log.V(2).Info(err.Error())
-						return
-					}
-					action(child, namespaceResources)
-				})
-			}
+	res, ok := c.resources.Load(key)
+	if !ok {
+		return
+	}
+	nsNodes, _ := c.nsIndex.Load(key.Namespace)
+	nsNodesAll := nsNodes.All()
+	action(res, nsNodesAll)
+	childrenByUID := make(map[types.UID][]*Resource)
+	nsNodes.Range(func(_ kube.ResourceKey, child *Resource) bool {
+		if res.isParentOf(child) {
+			childrenByUID[child.Ref.UID] = append(childrenByUID[child.Ref.UID], child)
 		}
 		return true
 	})
+	// make sure children has no duplicates
+	for _, children := range childrenByUID {
+		if len(children) > 0 {
+			// The object might have multiple children with the same UID (e.g. replicaset from apps and extensions group). It is ok to pick any object but we need to make sure
+			// we pick the same child after every refresh.
+			sort.Slice(children, func(i, j int) bool {
+				key1 := children[i].ResourceKey()
+				key2 := children[j].ResourceKey()
+				return strings.Compare(key1.String(), key2.String()) < 0
+			})
+			child := children[0]
+			action(child, nsNodesAll)
+			child.iterateChildren(nsNodesAll, map[kube.ResourceKey]bool{res.ResourceKey(): true}, func(err error, child *Resource, namespaceResources map[kube.ResourceKey]*Resource) {
+				if err != nil {
+					c.log.V(2).Info(err.Error())
+					return
+				}
+				action(child, namespaceResources)
+			})
+		}
+	}
 }
 
 // IsNamespaced answers if specified group/kind is a namespaced resource API or not
@@ -844,7 +844,6 @@ func (c *clusterCache) GetManagedLiveObjs(targetObjs []*unstructured.Unstructure
 		lock.Unlock()
 
 		if managedObj == nil {
-
 			if existingObj, exists := c.resources.Load(key); exists {
 				if existingObj.Resource != nil {
 					managedObj = existingObj.Resource
@@ -909,6 +908,7 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 	}
 
 	existingNode, exists := c.resources.Load(key)
+	// TODO node update not atomic here
 	if event == watch.Deleted {
 		if exists {
 			c.onNodeRemoved(key)
@@ -922,9 +922,8 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
 	c.setNode(newRes)
 	for _, h := range c.getResourceUpdatedHandlers() {
-		//h(newRes, oldRes, c.nsIndex[newRes.Ref.Namespace])
-		res, loaded := c.nsIndex.Load(newRes.Ref.Namespace)
-		if !loaded {
+		res, ok := c.nsIndex.Load(newRes.Ref.Namespace)
+		if !ok {
 			continue
 		}
 		h(newRes, oldRes, res.All())
@@ -932,11 +931,13 @@ func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
 }
 
 func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
-	existing, ok := c.resources.LoadAndDelete(key)
+	// TODO load and delete is not atomic here
+	existing, ok := c.resources.Load(key)
 	if ok {
-		ns, ok := c.nsIndex.LoadAndDelete(key.Namespace)
-		// delete in ok will cause ns inner data to be removed
-		nsAllSnapshot := ns.All()
+		c.resources.Delete(key)
+		ns, ok := c.nsIndex.Load(key.Namespace)
+		// clear resources in namespace
+		nsAll := ns.All()
 		if ok {
 			if ns.Len() == 0 {
 				c.nsIndex.Delete(key.Namespace)
@@ -952,7 +953,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			}
 		}
 		for _, h := range c.getResourceUpdatedHandlers() {
-			h(nil, existing, nsAllSnapshot)
+			h(nil, existing, nsAll)
 		}
 	}
 }

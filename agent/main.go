@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	goflags "flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -15,26 +16,32 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"k8s.io/klog/v2"
+
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2/klogr"
 
+	_ "net/http/pprof"
+
 	"github.com/argoproj/gitops-engine/pkg/cache"
 	"github.com/argoproj/gitops-engine/pkg/engine"
 	"github.com/argoproj/gitops-engine/pkg/sync"
 	"github.com/argoproj/gitops-engine/pkg/utils/kube"
-_ "net/http/pprof"
-
 )
 
 const (
 	annotationGCMark = "gitops-agent.argoproj.io/gc-mark"
 )
 
+var fs *goflags.FlagSet
+
 func main() {
 	log := klogr.New() // Delegates to klog
+	fs = goflags.NewFlagSet("", goflags.PanicOnError)
+	klog.InitFlags(fs)
 	err := newCmd(log).Execute()
 	checkError(err, log)
 }
@@ -202,6 +209,7 @@ func newCmd(log logr.Logger) *cobra.Command {
 	cmd.Flags().StringVar(&namespace, "default-namespace", "",
 		"The namespace that should be used if resource namespace is not specified. "+
 			"By default resources are installed into the same namespace where gitops-agent is installed.")
+	cmd.Flags().AddGoFlagSet(fs)
 	return &cmd
 }
 

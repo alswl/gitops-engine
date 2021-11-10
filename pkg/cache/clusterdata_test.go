@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"github.com/argoproj/gitops-engine/pkg/utils/kube"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"testing"
@@ -21,7 +22,28 @@ func TestNamespaceResourcesMap_LoadAndDelete(t *testing.T) {
 	m := NamespaceResourcesMap{}
 	m.Store("a", &ResourceMap{})
 	m.Store("b", &ResourceMap{})
-	existed, _ := m.LoadAndDelete("a")
+	existed, _ := m.Load("a")
+	m.Delete("a")
 	assert.NotNil(t, existed)
 	assert.NotNil(t, existed.All())
+}
+
+func TestResourceMap_LoadAndDelete(t *testing.T) {
+	m := ResourceMap{}
+	keyA := kube.ResourceKey{
+		Group:     "g",
+		Kind:      "k",
+		Namespace: "n",
+		Name:      "a",
+	}
+	m.Store(keyA, &Resource{})
+	keyB := kube.ResourceKey{
+		Group:     "g",
+		Kind:      "k",
+		Namespace: "n",
+		Name:      "b",
+	}
+	m.Store(keyB, &Resource{})
+	existed, _ := m.LoadAndDelete(keyA)
+	assert.NotNil(t, existed)
 }
