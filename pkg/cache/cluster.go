@@ -658,7 +658,7 @@ func (c *clusterCache) sync() error {
 		c.apisMeta.Store(api.GroupKind, info)
 		c.namespacedResources.Store(api.GroupKind, api.Meta.Namespaced)
 
-		return c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
+		err = c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
 			resourceVersion, err := c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
 				return listPager.EachListItem(context.Background(), metav1.ListOptions{}, func(obj runtime.Object) error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
@@ -674,20 +674,21 @@ func (c *clusterCache) sync() error {
 			}
 
 			go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
-
-			resWaitingList.Delete(api.GroupKind.String())
-			atomic.AddInt32(&resDoneCount, 1)
-			c.log.V(2).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", resDoneCount, "total", len(apis))
-			if len(apis)-int(resDoneCount) < int(ratioDisplayDelayInSync*float64(len(apis))) {
-				var left []string
-				resWaitingList.Range(func(key, value interface{}) bool {
-					left = append(left, key.(string))
-					return true
-				})
-				c.log.V(2).Info("syncing apis left", "left apis", left)
-			}
 			return nil
 		})
+
+		resWaitingList.Delete(api.GroupKind.String())
+		atomic.AddInt32(&resDoneCount, 1)
+		c.log.V(2).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", resDoneCount, "total", len(apis))
+		if len(apis)-int(resDoneCount) < int(ratioDisplayDelayInSync*float64(len(apis))) {
+			var left []string
+			resWaitingList.Range(func(key, value interface{}) bool {
+				left = append(left, key.(string))
+				return true
+			})
+			c.log.V(2).Info("syncing apis left", "left apis", left)
+		}
+		return err
 	})
 
 	if err != nil {
