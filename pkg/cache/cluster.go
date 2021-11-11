@@ -449,7 +449,7 @@ func (c *clusterCache) listResources(ctx context.Context, resClient dynamic.Reso
 }
 
 func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo, resClient dynamic.ResourceInterface, ns string, resourceVersion string) {
-	kube.RetryUntilSucceed(ctx, watchResourcesRetryTimeout, fmt.Sprintf("watch %s on %s", api.GroupKind, c.config.Host), c.log, func() (err error) {
+	kube.RetryUntilSucceed(ctx, watchResourcesRetryTimeout, fmt.Sprintf("watch %s in ns %s on %s", api.GroupKind, ns, c.config.Host), c.log, func() (err error) {
 		defer func() {
 			if r := recover(); r != nil {
 				err = fmt.Errorf("Recovered from panic: %+v\n%s", r, debug.Stack())
