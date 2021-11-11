@@ -144,7 +144,7 @@ func TestEnsureSynced(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources.Len(), 2)
+	assert.Equal(t, cluster.resources.Len(), 2)
 	var names []string
 	cluster.resources.Range(func(key kube.ResourceKey, value *Resource) bool {
 		names = append(names, key.Name)
@@ -259,7 +259,7 @@ func TestEnsureSyncedSingleNamespace(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources.Len(), 1)
+	assert.Equal(t, cluster.resources.Len(), 1)
 	var names []string
 	cluster.resources.Range(func(k kube.ResourceKey, value *Resource) bool {
 		names = append(names, k.Name)

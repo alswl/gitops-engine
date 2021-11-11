@@ -658,7 +658,7 @@ func (c *clusterCache) sync() error {
 		c.apisMeta.Store(api.GroupKind, info)
 		c.namespacedResources.Store(api.GroupKind, api.Meta.Namespaced)
 
-		err = c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
+		err := c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
 			resourceVersion, err := c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
 				return listPager.EachListItem(context.Background(), metav1.ListOptions{}, func(obj runtime.Object) error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
@@ -940,6 +940,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 		// clear resources in namespace
 		nsAll := ns.All()
 		if ok {
+			ns.Delete(key)
 			if ns.Len() == 0 {
 				c.nsIndex.Delete(key.Namespace)
 			}
