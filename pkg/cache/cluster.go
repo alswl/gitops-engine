@@ -680,14 +680,14 @@ func (c *clusterCache) sync() error {
 		resWaitingList.Delete(api.GroupKind.String())
 		atomic.AddInt32(&resDoneCount, 1)
 
-		c.log.V(2).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", atomic.LoadInt32(&resDoneCount), "total", len(apis))
+		c.log.V(1).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", atomic.LoadInt32(&resDoneCount), "total", len(apis))
 		if len(apis)-int(atomic.LoadInt32(&resDoneCount)) < int(ratioDisplayDelayInSync*float64(len(apis))) {
 			var left []string
 			resWaitingList.Range(func(key, value interface{}) bool {
 				left = append(left, key.(string))
 				return true
 			})
-			c.log.V(2).Info("syncing apis left", "left apis", left)
+			c.log.V(1).Info("syncing apis left", "left apis", left)
 		}
 		return err
 	})
