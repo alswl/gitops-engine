@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/argoproj/gitops-engine/pkg/utils/text"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -179,6 +180,7 @@ func newCmd(log logr.Logger) *cobra.Command {
 				log.Info("Synchronization triggered by API call")
 				resync <- true
 			})
+			http.Handle("/metrics", promhttp.Handler())
 			go func() {
 				checkError(http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", port), nil), log)
 			}()
