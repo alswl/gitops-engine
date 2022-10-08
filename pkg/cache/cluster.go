@@ -115,6 +115,8 @@ type ClusterCache interface {
 	GetManagedLiveObjs(targetObjs []*unstructured.Unstructured, isManaged func(r *Resource) bool) (map[kube.ResourceKey]*unstructured.Unstructured, error)
 	// GetClusterInfo returns cluster cache statistics
 	GetClusterInfo() ClusterInfo
+	// GetClusterInfoSnapshot returns cluster cache statistics instantly, not thread safe
+	GetClusterInfoSnapshot() ClusterInfo
 	// OnResourceUpdated register event handler that is executed every time when resource get's updated in the cache
 	OnResourceUpdated(handler OnResourceUpdatedHandler) Unsubscribe
 	// OnEvent register event handler that is executed every time when new K8S event received
@@ -1060,6 +1062,19 @@ func (c *clusterCache) GetClusterInfo() ClusterInfo {
 	c.syncStatus.lock.Lock()
 	defer c.syncStatus.lock.Unlock()
 
+	return ClusterInfo{
+		APIsCount:         len(c.apisMeta),
+		K8SVersion:        c.serverVersion,
+		ResourcesCount:    len(c.resources),
+		Server:            c.config.Host,
+		LastCacheSyncTime: c.syncStatus.syncTime,
+		SyncError:         c.syncStatus.syncError,
+		APIResources:      c.apiResources,
+	}
+}
+
+// GetClusterInfoSnapshot returns cluster cache statistics
+func (c *clusterCache) GetClusterInfoSnapshot() ClusterInfo {
 	return ClusterInfo{
 		APIsCount:         len(c.apisMeta),
 		K8SVersion:        c.serverVersion,
