@@ -154,11 +154,12 @@ func TestEnsureSynced(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources, 2)
+	assert.Equal(t, cluster.resources.Len(), 2)
 	var names []string
-	for k := range cluster.resources {
-		names = append(names, k.Name)
-	}
+	cluster.resources.Range(func(key kube.ResourceKey, value *Resource) bool {
+		names = append(names, key.Name)
+		return true
+	})
 	assert.ElementsMatch(t, []string{"helm-guestbook1", "helm-guestbook2"}, names)
 }
 
@@ -190,7 +191,8 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
 
 		assert.Len(t, refs, 0)
 	})
@@ -209,7 +211,8 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
 
 		assert.Len(t, refs, 0)
 	})
@@ -228,7 +231,8 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
 
 		assert.ElementsMatch(t, refs, []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kube.StatefulSetKind, Name: "web", UID: "123"}})
 	})
@@ -257,18 +261,19 @@ func TestEnsureSyncedSingleNamespace(t *testing.T) {
 	}
 
 	cluster := newCluster(t, obj1, obj2)
-	cluster.namespaces = []string{"default1"}
+	cluster.namespaces = StringList{list: []string{"default1"}}
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
 
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources, 1)
+	assert.Equal(t, cluster.resources.Len(), 1)
 	var names []string
-	for k := range cluster.resources {
+	cluster.resources.Range(func(k kube.ResourceKey, value *Resource) bool {
 		names = append(names, k.Name)
-	}
+		return true
+	})
 	assert.ElementsMatch(t, []string{"helm-guestbook1"}, names)
 }
 
@@ -346,7 +351,7 @@ func TestGetManagedLiveObjsNamespacedModeClusterLevelResource(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -371,7 +376,7 @@ func TestGetManagedLiveObjsNamespacedModeClusterLevelResource_ClusterResourceEna
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 	cluster.clusterResources = true
 
 	err := cluster.EnsureSynced()
@@ -412,7 +417,7 @@ func TestGetManagedLiveObjsAllNamespaces(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = nil
+	cluster.namespaces = StringList{}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -440,7 +445,7 @@ func TestGetManagedLiveObjsValidNamespace(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -468,7 +473,7 @@ func TestGetManagedLiveObjsInvalidNamespace(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "develop"}
+	cluster.namespaces = StringList{list: []string{"default", "develop"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -492,23 +497,23 @@ metadata:
 func TestGetManagedLiveObjsFailedConversion(t *testing.T) {
 	cronTabGroup := "stable.example.com"
 
-	testCases := []struct{
-		name string
-		localConvertFails bool
+	testCases := []struct {
+		name                         string
+		localConvertFails            bool
 		expectConvertToVersionCalled bool
-		expectGetResourceCalled bool
+		expectGetResourceCalled      bool
 	}{
 		{
-			name: "local convert fails, so GetResource is called",
-			localConvertFails: true,
+			name:                         "local convert fails, so GetResource is called",
+			localConvertFails:            true,
 			expectConvertToVersionCalled: true,
-			expectGetResourceCalled: true,
+			expectGetResourceCalled:      true,
 		},
 		{
-			name: "local convert succeeds, so GetResource is not called",
-			localConvertFails: false,
+			name:                         "local convert succeeds, so GetResource is not called",
+			localConvertFails:            false,
 			expectConvertToVersionCalled: true,
-			expectGetResourceCalled: false,
+			expectGetResourceCalled:      false,
 		},
 	}
 
@@ -528,7 +533,7 @@ func TestGetManagedLiveObjsFailedConversion(t *testing.T) {
 			cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 				return nil, true
 			}))
-			cluster.namespaces = []string{"default"}
+			cluster.namespaces = StringList{list: []string{"default"}}
 
 			err = cluster.EnsureSynced()
 			require.NoError(t, err)
@@ -556,7 +561,6 @@ metadata:
 					getResourceWasCalled = true
 					return testCronTab(), nil
 				})
-
 
 			managedObjs, err := cluster.GetManagedLiveObjs([]*unstructured.Unstructured{targetDeploy}, func(r *Resource) bool {
 				return true
@@ -664,7 +668,7 @@ func TestWatchCacheUpdated(t *testing.T) {
 	defer cluster.lock.Unlock()
 	cluster.replaceResourceCache(podGroupKind, []*Resource{cluster.newResource(mustToUnstructured(updated)), cluster.newResource(mustToUnstructured(added))}, "")
 
-	_, ok := cluster.resources[getResourceKey(t, removed)]
+	_, ok := cluster.resources.Load(getResourceKey(t, removed))
 	assert.False(t, ok)
 }
 
@@ -686,10 +690,10 @@ func TestNamespaceModeReplace(t *testing.T) {
 
 	cluster.replaceResourceCache(podGroupKind, nil, "ns1")
 
-	_, ok := cluster.resources[getResourceKey(t, ns1Pod)]
+	_, ok := cluster.resources.Load(getResourceKey(t, ns1Pod))
 	assert.False(t, ok)
 
-	_, ok = cluster.resources[getResourceKey(t, ns2Pod)]
+	_, ok = cluster.resources.Load(getResourceKey(t, ns2Pod))
 	assert.True(t, ok)
 }
 
@@ -712,36 +716,36 @@ func TestGetDuplicatedChildren(t *testing.T) {
 
 func TestGetClusterInfo(t *testing.T) {
 	cluster := newCluster(t)
-	cluster.apiResources = []kube.APIResourceInfo{{GroupKind: schema.GroupKind{Group: "test", Kind: "test kind"}}}
+	cluster.apiResources = APIResourceList{list: []kube.APIResourceInfo{{GroupKind: schema.GroupKind{Group: "test", Kind: "test kind"}}}}
 	cluster.serverVersion = "v1.16"
 	info := cluster.GetClusterInfo()
 	assert.Equal(t, ClusterInfo{
 		Server:       cluster.config.Host,
-		APIResources: cluster.apiResources,
+		APIResources: cluster.apiResources.All(),
 		K8SVersion:   cluster.serverVersion,
 	}, info)
 }
 
 func TestDeleteAPIResource(t *testing.T) {
 	cluster := newCluster(t)
-	cluster.apiResources = []kube.APIResourceInfo{{
+	cluster.apiResources = APIResourceList{list: []kube.APIResourceInfo{{
 		GroupKind:            schema.GroupKind{Group: "test", Kind: "test kind"},
 		GroupVersionResource: schema.GroupVersionResource{Version: "v1"},
-	}}
+	}}}
 
 	cluster.deleteAPIResource(kube.APIResourceInfo{GroupKind: schema.GroupKind{Group: "wrong group", Kind: "wrong kind"}})
-	assert.Len(t, cluster.apiResources, 1)
+	assert.Equal(t, cluster.apiResources.Len(), 1)
 	cluster.deleteAPIResource(kube.APIResourceInfo{
 		GroupKind:            schema.GroupKind{Group: "test", Kind: "test kind"},
 		GroupVersionResource: schema.GroupVersionResource{Version: "wrong version"},
 	})
-	assert.Len(t, cluster.apiResources, 1)
+	assert.Equal(t, cluster.apiResources.Len(), 1)
 
 	cluster.deleteAPIResource(kube.APIResourceInfo{
 		GroupKind:            schema.GroupKind{Group: "test", Kind: "test kind"},
 		GroupVersionResource: schema.GroupVersionResource{Version: "v1"},
 	})
-	assert.Empty(t, cluster.apiResources)
+	assert.Zero(t, cluster.apiResources.Len())
 }
 
 func TestAppendAPIResource(t *testing.T) {
@@ -753,11 +757,11 @@ func TestAppendAPIResource(t *testing.T) {
 	}
 
 	cluster.appendAPIResource(resourceInfo)
-	assert.ElementsMatch(t, []kube.APIResourceInfo{resourceInfo}, cluster.apiResources)
+	assert.ElementsMatch(t, []kube.APIResourceInfo{resourceInfo}, cluster.apiResources.All())
 
 	// make sure same group, kind version is not added twice
 	cluster.appendAPIResource(resourceInfo)
-	assert.ElementsMatch(t, []kube.APIResourceInfo{resourceInfo}, cluster.apiResources)
+	assert.ElementsMatch(t, []kube.APIResourceInfo{resourceInfo}, cluster.apiResources.All())
 }
 
 func ExampleNewClusterCache_resourceUpdatedEvents() {
@@ -816,25 +820,25 @@ func testPod() *corev1.Pod {
 
 func testCRD() *apiextensions.CustomResourceDefinition {
 	return &apiextensions.CustomResourceDefinition{
-		TypeMeta:   metav1.TypeMeta{
+		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apiextensions.k8s.io/v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "crontabs.stable.example.com",
 		},
-		Spec:       apiextensions.CustomResourceDefinitionSpec{
+		Spec: apiextensions.CustomResourceDefinitionSpec{
 			Group: "stable.example.com",
 			Versions: []apiextensions.CustomResourceDefinitionVersion{
 				{
-					Name: "v1",
-					Served: true,
+					Name:    "v1",
+					Served:  true,
 					Storage: true,
 					Schema: &apiextensions.CustomResourceValidation{
 						OpenAPIV3Schema: &apiextensions.JSONSchemaProps{
 							Type: "object",
 							Properties: map[string]apiextensions.JSONSchemaProps{
 								"cronSpec": {Type: "string"},
-								"image": {Type: "string"},
+								"image":    {Type: "string"},
 								"replicas": {Type: "integer"},
 							},
 						},
@@ -855,14 +859,14 @@ func testCRD() *apiextensions.CustomResourceDefinition {
 func testCronTab() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "stable.example.com/v1",
-		"kind": "CronTab",
+		"kind":       "CronTab",
 		"metadata": map[string]interface{}{
-			"name": "test-crontab",
+			"name":      "test-crontab",
 			"namespace": "default",
 		},
 		"spec": map[string]interface{}{
 			"cronSpec": "* * * * */5",
-			"image": "my-awesome-cron-image",
+			"image":    "my-awesome-cron-image",
 		},
 	}}
 }
