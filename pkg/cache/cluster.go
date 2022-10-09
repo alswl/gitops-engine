@@ -56,8 +56,7 @@ const (
 	// k8s list queries results.
 	// Limit is required to avoid memory spikes during cache initialization.
 	// The default limit of 50 is chosen based on experiments.
-	defaultListSemaphoreWeight    = 50
-	defaultAPISyncSemaphoreWeight = 50
+	defaultListSemaphoreWeight = 50
 )
 
 type apiMeta struct {
@@ -145,7 +144,6 @@ func NewClusterCache(config *rest.Config, opts ...UpdateSettingsFunc) *clusterCa
 		listPageSize:       defaultListPageSize,
 		listPageBufferSize: defaultListPageBufferSize,
 		listSemaphore:      semaphore.NewWeighted(defaultListSemaphoreWeight),
-		apiSyncSemaphore:   semaphore.NewWeighted(defaultAPISyncSemaphoreWeight),
 		resources:          ResourceMap{},
 		nsIndex:            NamespaceResourcesMap{},
 		config:             config,
@@ -191,8 +189,6 @@ type clusterCache struct {
 	// number of pages to prefetch for list pager.
 	listPageBufferSize int32
 	listSemaphore      WeightedSemaphore
-	// apiSyncSemaphore keeps API syncs in order, for avoid of dining philosophers problem
-	apiSyncSemaphore WeightedSemaphore
 
 	// retry options for list operations
 	listRetryLimit      int32
@@ -755,12 +751,6 @@ func (c *clusterCache) sync() error {
 		api := apis[i]
 
 		ctx, cancel := context.WithCancel(context.Background())
-		acqErr := c.apiSyncSemaphore.Acquire(ctx, 1)
-		if acqErr != nil {
-			cancel()
-			return acqErr
-		}
-		defer c.apiSyncSemaphore.Release(1)
 		info := &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel}
 		c.apisMeta.Store(api.GroupKind, info)
 		c.namespacedResources.Store(api.GroupKind, api.Meta.Namespaced)
