@@ -57,7 +57,7 @@ const (
 	// Limit is required to avoid memory spikes during cache initialization.
 	// The default limit of 50 is chosen based on experiments.
 	defaultListSemaphoreWeight    = 50
-	defaultAPISyncSemaphoreWeight = 100
+	defaultAPISyncSemaphoreWeight = 50
 )
 
 type apiMeta struct {
