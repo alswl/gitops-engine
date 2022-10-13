@@ -658,7 +658,7 @@ func (c *clusterCache) sync() error {
 		c.apisMeta.Store(api.GroupKind, info)
 		c.namespacedResources.Store(api.GroupKind, api.Meta.Namespaced)
 
-		err := c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
+		ierr := c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
 			resourceVersion, err := c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
 				return listPager.EachListItem(context.Background(), metav1.ListOptions{}, func(obj runtime.Object) error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
@@ -689,7 +689,7 @@ func (c *clusterCache) sync() error {
 			})
 			c.log.V(1).Info("syncing apis left", "left apis", left)
 		}
-		return err
+		return ierr
 	})
 
 	if err != nil {
