@@ -569,6 +569,7 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 					c.openAPISchemaLock.Lock()
 					openAPISchema, err := c.kubectl.LoadOpenAPISchema(c.config)
 					if err != nil {
+						c.openAPISchemaLock.Unlock()
 						return err
 					}
 					c.openAPISchema = openAPISchema
