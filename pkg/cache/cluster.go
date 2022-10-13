@@ -768,7 +768,9 @@ func (c *clusterCache) IterateHierarchy(key kube.ResourceKey, action func(resour
 	}
 	nsNodes, _ := c.nsIndex.Load(key.Namespace)
 	nsNodesAll := nsNodes.All()
-	action(res, nsNodesAll)
+	if !action(res, nsNodesAll) {
+		return
+	}
 	childrenByUID := make(map[types.UID][]*Resource)
 	nsNodes.Range(func(_ kube.ResourceKey, child *Resource) bool {
 		if res.isParentOf(child) {
@@ -787,14 +789,15 @@ func (c *clusterCache) IterateHierarchy(key kube.ResourceKey, action func(resour
 				return strings.Compare(key1.String(), key2.String()) < 0
 			})
 			child := children[0]
-			action(child, nsNodesAll)
-			child.iterateChildren(nsNodesAll, map[kube.ResourceKey]bool{res.ResourceKey(): true}, func(err error, child *Resource, namespaceResources map[kube.ResourceKey]*Resource) bool {
-				if err != nil {
-					c.log.V(2).Info(err.Error())
-					return false
-				}
-				return action(child, namespaceResources)
-			})
+			if action(child, nsNodesAll) {
+				child.iterateChildren(nsNodesAll, map[kube.ResourceKey]bool{res.ResourceKey(): true}, func(err error, child *Resource, namespaceResources map[kube.ResourceKey]*Resource) bool {
+					if err != nil {
+						c.log.V(2).Info(err.Error())
+						return false
+					}
+					return action(child, namespaceResources)
+				})
+			}
 		}
 	}
 }
