@@ -145,11 +145,12 @@ func TestEnsureSynced(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources, 2)
+	assert.Equal(t, cluster.resources.Len(), 2)
 	var names []string
-	for k := range cluster.resources {
-		names = append(names, k.Name)
-	}
+	cluster.resources.Range(func(key kube.ResourceKey, value *Resource) bool {
+		names = append(names, key.Name)
+		return true
+	})
 	assert.ElementsMatch(t, []string{"helm-guestbook1", "helm-guestbook2"}, names)
 }
 
@@ -181,7 +182,8 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
 
 		assert.Len(t, refs, 0)
 	})
@@ -200,7 +202,8 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
 
 		assert.Len(t, refs, 0)
 	})
@@ -219,7 +222,9 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		cluster.lock.Lock()
 		defer cluster.lock.Unlock()
 
-		refs := cluster.resources[kube.GetResourceKey(pvc)].OwnerRefs
+		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
+		refs := res.OwnerRefs
+
 
 		assert.ElementsMatch(t, refs, []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kube.StatefulSetKind, Name: "web", UID: "123"}})
 	})
@@ -248,18 +253,19 @@ func TestEnsureSyncedSingleNamespace(t *testing.T) {
 	}
 
 	cluster := newCluster(t, obj1, obj2)
-	cluster.namespaces = []string{"default1"}
+	cluster.namespaces = StringList{list: []string{"default1"}}
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
 
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Len(t, cluster.resources, 1)
+	assert.Equal(t, cluster.resources.Len(), 1)
 	var names []string
-	for k := range cluster.resources {
+	cluster.resources.Range(func(k kube.ResourceKey, value *Resource) bool {
 		names = append(names, k.Name)
-	}
+		return true
+	})
 	assert.ElementsMatch(t, []string{"helm-guestbook1"}, names)
 }
 
@@ -337,7 +343,7 @@ func TestGetManagedLiveObjsNamespacedModeClusterLevelResource(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -362,7 +368,7 @@ func TestGetManagedLiveObjsNamespacedModeClusterLevelResource_ClusterResourceEna
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 	cluster.clusterResources = true
 
 	err := cluster.EnsureSynced()
@@ -403,7 +409,7 @@ func TestGetManagedLiveObjsAllNamespaces(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = nil
+	cluster.namespaces = StringList{}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -431,7 +437,7 @@ func TestGetManagedLiveObjsValidNamespace(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "production"}
+	cluster.namespaces = StringList{list: []string{"default", "production"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -459,7 +465,7 @@ func TestGetManagedLiveObjsInvalidNamespace(t *testing.T) {
 	cluster.Invalidate(SetPopulateResourceInfoHandler(func(un *unstructured.Unstructured, isRoot bool) (info interface{}, cacheManifest bool) {
 		return nil, true
 	}))
-	cluster.namespaces = []string{"default", "develop"}
+	cluster.namespaces = StringList{list: []string{"default", "develop"}}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -573,7 +579,8 @@ func TestWatchCacheUpdated(t *testing.T) {
 	defer cluster.lock.Unlock()
 	cluster.replaceResourceCache(podGroupKind, []*Resource{cluster.newResource(mustToUnstructured(updated)), cluster.newResource(mustToUnstructured(added))}, "")
 
-	_, ok := cluster.resources[getResourceKey(t, removed)]
+	_, ok := cluster.resources.Load(getResourceKey(t, removed))
+
 	assert.False(t, ok)
 }
 
@@ -595,10 +602,11 @@ func TestNamespaceModeReplace(t *testing.T) {
 
 	cluster.replaceResourceCache(podGroupKind, nil, "ns1")
 
-	_, ok := cluster.resources[getResourceKey(t, ns1Pod)]
+
+	_, ok := cluster.resources.Load(getResourceKey(t, ns1Pod))
 	assert.False(t, ok)
 
-	_, ok = cluster.resources[getResourceKey(t, ns2Pod)]
+	_, ok = cluster.resources.Load(getResourceKey(t, ns2Pod))
 	assert.True(t, ok)
 }
 
@@ -621,12 +629,13 @@ func TestGetDuplicatedChildren(t *testing.T) {
 
 func TestGetClusterInfo(t *testing.T) {
 	cluster := newCluster(t)
-	cluster.apiGroups = []metav1.APIGroup{{Name: "test"}}
+	cluster.apiGroups = APIGroupList{list: []metav1.APIGroup{{Name: "test"} }}
+
 	cluster.serverVersion = "v1.16"
 	info := cluster.GetClusterInfo()
 	assert.Equal(t, ClusterInfo{
 		Server:     cluster.config.Host,
-		APIGroups:  cluster.apiGroups,
+		APIGroups:  cluster.apiGroups.All(),
 		K8SVersion: cluster.serverVersion,
 	}, info)
 }
