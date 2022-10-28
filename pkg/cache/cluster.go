@@ -36,7 +36,6 @@ const (
 	watchResyncTimeout         = 10 * time.Minute
 	watchResourcesRetryTimeout = 1 * time.Second
 	ClusterRetryTimeout        = 10 * time.Second
-	ratioDisplayDelayInSync    = 0.1
 
 	// Same page size as in k8s.io/client-go/tools/pager/pager.go
 	defaultListPageSize = 500
@@ -46,7 +45,8 @@ const (
 	// k8s list queries results.
 	// Limit is required to avoid memory spikes during cache initialization.
 	// The default limit of 50 is chosen based on experiments.
-	defaultListSemaphoreWeight = 50
+	defaultListSemaphoreWeight     = 50
+	defaultApiListWatchConcurrency = 10
 )
 
 type apiMeta struct {
@@ -290,16 +290,27 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 			c.onNodeUpdated(oldRes, res)
 		}
 	}
-	c.resources.Range(func(key kube.ResourceKey, value *Resource) bool {
+	var foundObjs []kube.ResourceKey
+	var resourcesMap *ResourceMap
+	if ns == "" {
+		resourcesMap = &c.resources
+	} else {
+		nsRes, _ := c.nsIndex.LoadOrStore(ns, &ResourceMap{})
+		resourcesMap = nsRes
+	}
+	resourcesMap.Range(func(key kube.ResourceKey, _ *Resource) bool {
 		if key.Kind != gk.Kind || key.Group != gk.Group || ns != "" && key.Namespace != ns {
 			return true
 		}
 
 		if _, ok := objByKey[key]; !ok {
-			c.onNodeRemoved(key)
+			foundObjs = append(foundObjs, key)
 		}
 		return true
 	})
+	for _, obj := range foundObjs {
+		c.onNodeRemoved(obj)
+	}
 }
 
 func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
@@ -644,20 +655,55 @@ func (c *clusterCache) sync() error {
 	}
 
 	// analytics of RunAllAsync
-	resDoneCount := int32(0)
+	apisDoneCount := int32(0)
 	resWaitingList := sync.Map{}
+	resSyncingList := sync.Map{}
 	for _, api := range apis {
 		resWaitingList.Store(api.GroupKind.String(), "")
 	}
+
+	// observation
+	watchedNs := int32(0)
+	ticker := time.NewTicker(10 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				c.log.Info(fmt.Sprintf("Syncing cluster: %d/%d", atomic.LoadInt32(&apisDoneCount), len(apis)))
+				c.log.Info(fmt.Sprintf("Watching namespaces goroutine: %d", atomic.LoadInt32(&watchedNs)))
+				c.log.Info(fmt.Sprintf("resources count: %d", c.resources.Len()))
+				var resSyncing []string
+				resSyncingList.Range(func(key, value interface{}) bool {
+					resSyncing = append(resSyncing, key.(string))
+					return true
+				})
+				c.log.Info(fmt.Sprintf("resSyncing: %v", strings.Join(resSyncing, ", ")))
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
+	var apisSemaphore = semaphore.NewWeighted(defaultApiListWatchConcurrency)
 	// TODO failure toleration, allow some resources failed but continue sync
 	// start sync all resources
 	err = kube.RunAllAsync(len(apis), func(i int) error {
 		api := apis[i]
 
 		ctx, cancel := context.WithCancel(context.Background())
+		_ = apisSemaphore.Acquire(ctx, 1)
+		resSyncingList.Store(api.GroupKind.String(), "")
+		defer func() {
+			apisSemaphore.Release(1)
+			resSyncingList.Delete(api.GroupKind.String())
+		}()
 		info := &apiMeta{namespaced: api.Meta.Namespaced, watchCancel: cancel}
 		c.apisMeta.Store(api.GroupKind, info)
 		c.namespacedResources.Store(api.GroupKind, api.Meta.Namespaced)
+
+		var resources []*runtime.Object
 
 		ierr := c.processApi(client, api, func(resClient dynamic.ResourceInterface, ns string) error {
 			resourceVersion, err := c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
@@ -667,6 +713,7 @@ func (c *clusterCache) sync() error {
 					} else {
 						c.setNode(c.newResource(un))
 					}
+					resources = append(resources, &obj)
 					return nil
 				})
 			})
@@ -674,22 +721,19 @@ func (c *clusterCache) sync() error {
 				return fmt.Errorf("failed to load initial state of resource %s: %v", api.GroupKind.String(), err)
 			}
 
-			go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
+			// only watch when resources in ns
+			// otherwise will recheck after cluster cache resync
+			if len(resources) > 0 {
+				go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
+				atomic.AddInt32(&watchedNs, 1)
+			}
 			return nil
 		})
 
 		resWaitingList.Delete(api.GroupKind.String())
-		atomic.AddInt32(&resDoneCount, 1)
+		atomic.AddInt32(&apisDoneCount, 1)
 
-		c.log.V(1).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", atomic.LoadInt32(&resDoneCount), "total", len(apis))
-		if len(apis)-int(atomic.LoadInt32(&resDoneCount)) < int(ratioDisplayDelayInSync*float64(len(apis))) {
-			var left []string
-			resWaitingList.Range(func(key, value interface{}) bool {
-				left = append(left, key.(string))
-				return true
-			})
-			c.log.V(1).Info("syncing apis left", "left apis", left)
-		}
+		c.log.V(1).Info("Finished syncing resource", "resource", api.GroupKind.String(), "done", atomic.LoadInt32(&apisDoneCount), "total", len(apis))
 		return ierr
 	})
 
@@ -697,6 +741,7 @@ func (c *clusterCache) sync() error {
 		return fmt.Errorf("failed to sync cluster %s: %v", c.config.Host, err)
 	}
 
+	quit <- struct{}{}
 	c.log.Info("Cluster successfully synced")
 	return nil
 }
@@ -942,8 +987,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 	if ok {
 		c.resources.Delete(key)
 		ns, ok := c.nsIndex.Load(key.Namespace)
-		// clear resources in namespace
-		nsAll := ns.All()
+		// all resources in namespace
 		if ok {
 			ns.Delete(key)
 			if ns.Len() == 0 {
@@ -959,8 +1003,11 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 				})
 			}
 		}
-		for _, h := range c.getResourceUpdatedHandlers() {
-			h(nil, existing, nsAll)
+		if len(c.getResourceUpdatedHandlers()) > 0 {
+			nsAll := ns.All()
+			for _, h := range c.getResourceUpdatedHandlers() {
+				h(nil, existing, nsAll)
+			}
 		}
 	}
 }
