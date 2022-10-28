@@ -31,10 +31,12 @@ import (
 )
 
 const (
-	annotationGCMark = "gitops-agent.argoproj.io/gc-mark"
-	envProfile       = "GITOPS_ENGINE_PROFILE"
-	envProfileHost   = "GITOPS_ENGINE_PROFILE_HOST"
-	envProfilePort   = "GITOPS_ENGINE_PROFILE_PORT"
+	annotationGCMark   = "gitops-agent.argoproj.io/gc-mark"
+	envProfile         = "GITOPS_ENGINE_PROFILE"
+	envProfileHost     = "GITOPS_ENGINE_PROFILE_HOST"
+	envProfilePort     = "GITOPS_ENGINE_PROFILE_PORT"
+	defaultClientQPS   = 100
+	defaultClientBurst = 200
 )
 
 func main() {
@@ -126,6 +128,8 @@ func newCmd(log logr.Logger) *cobra.Command {
 		namespace     string
 		namespaced    bool
 		userAgent     string
+		qps           int
+		burst         int
 	)
 	cmd := cobra.Command{
 		Use: "gitops REPO_PATH",
@@ -144,6 +148,8 @@ func newCmd(log logr.Logger) *cobra.Command {
 			if userAgent != "" {
 				config.UserAgent = userAgent
 			}
+			config.QPS = float32(qps)
+			config.Burst = burst
 
 			var namespaces []string
 			if namespaced {
@@ -166,8 +172,11 @@ func newCmd(log logr.Logger) *cobra.Command {
 			gitOpsEngine := engine.NewEngine(config, clusterCache, engine.WithLogr(log))
 			checkError(err, log)
 
+			start := time.Now().Unix()
 			cleanup, err := gitOpsEngine.Run()
 			checkError(err, log)
+			end := time.Now().Unix()
+			log.Info("agent synced complete, duration(s): ", end-start)
 			defer cleanup()
 
 			resync := make(chan bool)
@@ -220,6 +229,8 @@ func newCmd(log logr.Logger) *cobra.Command {
 		"The namespace that should be used if resource namespace is not specified. "+
 			"By default resources are installed into the same namespace where gitops-agent is installed.")
 	cmd.Flags().StringVar(&userAgent, "user-agent", "", "User agent name")
+	cmd.Flags().IntVar(&qps, "qps", defaultClientQPS, "QPS to use while talking with kubernetes apiserver")
+	cmd.Flags().IntVar(&burst, "burst", defaultClientBurst, "Burst to use while talking with kubernetes apiserver")
 	return &cmd
 }
 
