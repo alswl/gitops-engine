@@ -176,7 +176,7 @@ func newCmd(log logr.Logger) *cobra.Command {
 			cleanup, err := gitOpsEngine.Run()
 			checkError(err, log)
 			end := time.Now().Unix()
-			log.Info("agent synced complete, duration(s): ", end-start)
+			log.Info("agent synced complete", "duration(s)", end-start)
 			defer cleanup()
 
 			resync := make(chan bool)
