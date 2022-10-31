@@ -47,6 +47,7 @@ const (
 	// The default limit of 50 is chosen based on experiments.
 	defaultListSemaphoreWeight     = 50
 	defaultApiListWatchConcurrency = 10
+	defaultSkipWatchEmptyResource  = true
 )
 
 type apiMeta struct {
@@ -467,6 +468,29 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 			}
 		}()
 
+		if defaultSkipWatchEmptyResource {
+			hasResourceInNs := false
+			_, _ = c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
+				_ = listPager.EachListItem(ctx, metav1.ListOptions{ResourceVersion: resourceVersion}, func(obj runtime.Object) error {
+					hasResourceInNs = true
+					return fmt.Errorf("only get first resource")
+				})
+				return fmt.Errorf("only get first resource")
+			})
+
+			// only watch when resources in ns
+			// otherwise will recheck after watchResyncTimeout
+			if !hasResourceInNs {
+				ticker := time.NewTicker(watchResyncTimeout)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+					return nil
+				}
+			}
+		}
+
 		// load API initial state if no resource version provided
 		if resourceVersion == "" {
 			resourceVersion, err = c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
@@ -663,15 +687,15 @@ func (c *clusterCache) sync() error {
 	}
 
 	// observation
-	watchedNs := int32(0)
+	watchedCount := int32(0)
 	ticker := time.NewTicker(10 * time.Second)
 	quit := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				c.log.Info(fmt.Sprintf("Syncing cluster: %d/%d", atomic.LoadInt32(&apisDoneCount), len(apis)))
-				c.log.Info(fmt.Sprintf("Watching namespaces goroutine: %d", atomic.LoadInt32(&watchedNs)))
+				c.log.Info(fmt.Sprintf("Syncing cluster, apis: %d/%d", atomic.LoadInt32(&apisDoneCount), len(apis)))
+				c.log.Info(fmt.Sprintf("Watching namespaces goroutine: %d", atomic.LoadInt32(&watchedCount)))
 				c.log.Info(fmt.Sprintf("resources count: %d", c.resources.Len()))
 				var resSyncing []string
 				resSyncingList.Range(func(key, value interface{}) bool {
@@ -725,7 +749,7 @@ func (c *clusterCache) sync() error {
 			// otherwise will recheck after cluster cache resync
 			if len(resources) > 0 {
 				go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
-				atomic.AddInt32(&watchedNs, 1)
+				atomic.AddInt32(&watchedCount, 1)
 			}
 			return nil
 		})
