@@ -46,7 +46,7 @@ const (
 	// Limit is required to avoid memory spikes during cache initialization.
 	// The default limit of 50 is chosen based on experiments.
 	defaultListSemaphoreWeight     = 50
-	defaultApiListWatchConcurrency = 10
+	defaultApiListWatchConcurrency = 40
 	defaultSkipWatchEmptyResource  = true
 )
 
