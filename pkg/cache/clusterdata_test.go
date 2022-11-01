@@ -12,10 +12,10 @@ func TestGroupKindBoolMap_Reload(t *testing.T) {
 	m.Store(schema.GroupKind{Group: "group", Kind: "k1"}, true)
 	m.Store(schema.GroupKind{Group: "group", Kind: "k2"}, true)
 	m.Reload(map[schema.GroupKind]bool{
-        {Group: "group", Kind: "k3"}: true,
-    })
+		{Group: "group", Kind: "k3"}: true,
+	})
 
-	assert.Equal(t, 1, m.Len())
+	assert.Equal(t, 1, m.BlockingLen())
 }
 
 func TestNamespaceResourcesMap_LoadAndDelete(t *testing.T) {
@@ -25,7 +25,7 @@ func TestNamespaceResourcesMap_LoadAndDelete(t *testing.T) {
 	existed, _ := m.Load("a")
 	m.Delete("a")
 	assert.NotNil(t, existed)
-	assert.NotNil(t, existed.All())
+	assert.NotNil(t, existed.BlockingAll())
 }
 
 func TestResourceMap_LoadAndDelete(t *testing.T) {

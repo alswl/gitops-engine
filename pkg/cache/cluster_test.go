@@ -145,7 +145,7 @@ func TestEnsureSynced(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Equal(t, cluster.resources.Len(), 2)
+	assert.Equal(t, cluster.resources.BlockingLen(), 2)
 	var names []string
 	cluster.resources.Range(func(key kube.ResourceKey, value *Resource) bool {
 		names = append(names, key.Name)
@@ -225,7 +225,6 @@ func TestStatefulSetOwnershipInferred(t *testing.T) {
 		res, _ := cluster.resources.Load(kube.GetResourceKey(pvc))
 		refs := res.OwnerRefs
 
-
 		assert.ElementsMatch(t, refs, []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kube.StatefulSetKind, Name: "web", UID: "123"}})
 	})
 }
@@ -260,7 +259,7 @@ func TestEnsureSyncedSingleNamespace(t *testing.T) {
 	cluster.lock.Lock()
 	defer cluster.lock.Unlock()
 
-	assert.Equal(t, cluster.resources.Len(), 1)
+	assert.Equal(t, cluster.resources.BlockingLen(), 1)
 	var names []string
 	cluster.resources.Range(func(k kube.ResourceKey, value *Resource) bool {
 		names = append(names, k.Name)
@@ -602,7 +601,6 @@ func TestNamespaceModeReplace(t *testing.T) {
 
 	cluster.replaceResourceCache(podGroupKind, nil, "ns1")
 
-
 	_, ok := cluster.resources.Load(getResourceKey(t, ns1Pod))
 	assert.False(t, ok)
 
@@ -629,13 +627,13 @@ func TestGetDuplicatedChildren(t *testing.T) {
 
 func TestGetClusterInfo(t *testing.T) {
 	cluster := newCluster(t)
-	cluster.apiGroups = APIGroupList{list: []metav1.APIGroup{{Name: "test"} }}
+	cluster.apiGroups = APIGroupList{list: []metav1.APIGroup{{Name: "test"}}}
 
 	cluster.serverVersion = "v1.16"
 	info := cluster.GetClusterInfo()
 	assert.Equal(t, ClusterInfo{
 		Server:     cluster.config.Host,
-		APIGroups:  cluster.apiGroups.All(),
+		APIGroups:  cluster.apiGroups.CopiedAll(),
 		K8SVersion: cluster.serverVersion,
 	}, info)
 }

@@ -43,7 +43,7 @@ func (m *ApisMetaMap) Delete(gk schema.GroupKind) {
 	m.syncMap.Delete(gk)
 }
 
-//Range loops the map, and Range ensures every item will be load, but not guarantee missing(phantom read)
+// Range loops the map, and Range ensures every item will be load, but not guarantee missing(phantom read)
 func (m *ApisMetaMap) Range(fn func(key schema.GroupKind, value *apiMeta) bool) {
 	m.syncMap.Range(func(key, value interface{}) bool {
 		typedKey, keyTypeOk := key.(schema.GroupKind)
@@ -56,8 +56,8 @@ func (m *ApisMetaMap) Range(fn func(key schema.GroupKind, value *apiMeta) bool) 
 	})
 }
 
-//Len return ApisMetaMap length, roughly, it depends on the time point of Range each loop
-func (m *ApisMetaMap) Len() int {
+// BlockingLen return ApisMetaMap length, roughly, it depends on the time point of Range each loop
+func (m *ApisMetaMap) BlockingLen() int {
 	length := 0
 	m.syncMap.Range(func(_, _ interface{}) bool {
 		length++
@@ -126,7 +126,7 @@ func (m *ResourceMap) Range(fn func(key kube.ResourceKey, value *Resource) bool)
 	})
 }
 
-func (m *ResourceMap) Len() int {
+func (m *ResourceMap) BlockingLen() int {
 	length := 0
 	m.syncMap.Range(func(_, _ interface{}) bool {
 		length++
@@ -135,9 +135,9 @@ func (m *ResourceMap) Len() int {
 	return length
 }
 
-// All return all of the original resources in the map, this maybe cause pointer leaks, deprecated.
+// BlockingAll return all of the original resources in the map, this maybe cause pointer leaks, deprecated.
 // TODO remove
-func (l *ResourceMap) All() map[kube.ResourceKey]*Resource {
+func (l *ResourceMap) BlockingAll() map[kube.ResourceKey]*Resource {
 	result := make(map[kube.ResourceKey]*Resource)
 	l.Range(func(key kube.ResourceKey, value *Resource) bool {
 		result[key] = value
@@ -163,7 +163,7 @@ func (l *APIGroupList) Get() []metav1.APIGroup {
 	return l.list
 }
 
-func (l *APIGroupList) Len() int {
+func (l *APIGroupList) BlockingLen() int {
 	l.lock.RLock()
 	defer l.lock.RUnlock()
 	return len(l.list)
@@ -188,14 +188,14 @@ func (l *APIGroupList) Clear() {
 	l.list = []metav1.APIGroup{}
 }
 
-// GetReferrerList return real inner list of APIGroupList, deprecated
-func (l *APIGroupList) GetReferrerList() []metav1.APIGroup {
+// GetInnerList return real inner list of APIGroupList, deprecated
+func (l *APIGroupList) GetInnerList() []metav1.APIGroup {
 	return l.list
 }
 
-// All return all of the original resources in the map, this maybe cause pointer leaks, depreacated.
+// CopiedAll return all of the original resources in the map, this maybe cause pointer leaks, depreacated.
 // TODO remove
-func (l *APIGroupList) All() []metav1.APIGroup {
+func (l *APIGroupList) CopiedAll() []metav1.APIGroup {
 	snapshot := make([]metav1.APIGroup, len(l.list))
 	copy(l.list, snapshot)
 	return snapshot
@@ -261,7 +261,7 @@ func (m *NamespaceResourcesMap) Range(fn func(key string, value *ResourceMap) bo
 	})
 }
 
-func (m *NamespaceResourcesMap) Len() int {
+func (m *NamespaceResourcesMap) BlockingLen() int {
 	length := 0
 	m.syncMap.Range(func(_, _ interface{}) bool {
 		length++
@@ -317,7 +317,7 @@ func (m *GroupKindBoolMap) Range(fn func(key schema.GroupKind, value bool) bool)
 	})
 }
 
-func (m *GroupKindBoolMap) Len() int {
+func (m *GroupKindBoolMap) BlockingLen() int {
 	length := 0
 	m.syncMap.Range(func(_, _ interface{}) bool {
 		length++

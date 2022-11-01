@@ -257,7 +257,7 @@ func (c *clusterCache) GetServerVersion() string {
 
 // GetAPIGroups returns information about observed API groups
 func (c *clusterCache) GetAPIGroups() []metav1.APIGroup {
-	return c.apiGroups.All()
+	return c.apiGroups.CopiedAll()
 }
 
 // GetOpenAPISchema returns open API schema of supported API resources
@@ -282,7 +282,8 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 	// update existing nodes
 	for i := range resources {
 		res := resources[i]
-
+		// FIXME diff with original
+		//oldRes, _ := c.resources.Load(res.ResourceKey())
 		oldRes, loaded := c.resources.LoadOrStore(res.ResourceKey(), res)
 		if !loaded {
 			continue
@@ -292,6 +293,7 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 		}
 	}
 	var foundObjs []kube.ResourceKey
+	// FIXME diff with original
 	var resourcesMap *ResourceMap
 	if ns == "" {
 		resourcesMap = &c.resources
@@ -299,6 +301,7 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 		nsRes, _ := c.nsIndex.LoadOrStore(ns, &ResourceMap{})
 		resourcesMap = nsRes
 	}
+	// FIXME time using 3.53s
 	resourcesMap.Range(func(key kube.ResourceKey, _ *Resource) bool {
 		if key.Kind != gk.Kind || key.Group != gk.Group || ns != "" && key.Namespace != ns {
 			return true
@@ -343,22 +346,24 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 	return resource
 }
 
-func (c *clusterCache) setNode(res *Resource) {
-	key := res.ResourceKey()
-	c.resources.Store(key, res)
-
-	nsRes, _ := c.nsIndex.LoadOrStore(key.Namespace, &ResourceMap{})
-	nsRes.Store(key, res)
+func (c *clusterCache) setNode(n *Resource) {
+	key := n.ResourceKey()
+	// FIXME time using 6.24s
+	c.resources.Store(key, n)
+	nsResMap, _ := c.nsIndex.LoadOrStore(key.Namespace, &ResourceMap{})
+	// FIXME time using 17.2s
+	nsResMap.Store(key, n)
 
 	// update inferred parent references
-	if res.isInferredParentOf != nil || mightHaveInferredOwner(res) {
-		nsRes.Range(func(k kube.ResourceKey, v *Resource) bool {
+	if n.isInferredParentOf != nil || mightHaveInferredOwner(n) {
+		nsResMap.Range(func(k kube.ResourceKey, v *Resource) bool {
 			// update child resource owner references
-			if res.isInferredParentOf != nil && mightHaveInferredOwner(v) {
-				v.setOwnerRef(res.toOwnerRef(), res.isInferredParentOf(k))
+			if n.isInferredParentOf != nil && mightHaveInferredOwner(v) {
+				v.setOwnerRef(n.toOwnerRef(), n.isInferredParentOf(k))
 			}
-			if mightHaveInferredOwner(res) && v.isInferredParentOf != nil {
-				res.setOwnerRef(v.toOwnerRef(), v.isInferredParentOf(res.ResourceKey()))
+			//FIXME time using 3.97s
+			if mightHaveInferredOwner(n) && v.isInferredParentOf != nil {
+				n.setOwnerRef(v.toOwnerRef(), v.isInferredParentOf(n.ResourceKey()))
 			}
 			return true
 		})
@@ -696,7 +701,7 @@ func (c *clusterCache) sync() error {
 			case <-ticker.C:
 				c.log.Info(fmt.Sprintf("Syncing cluster, apis: %d/%d", atomic.LoadInt32(&apisDoneCount), len(apis)))
 				c.log.Info(fmt.Sprintf("Watching namespaces goroutine: %d", atomic.LoadInt32(&watchedCount)))
-				c.log.Info(fmt.Sprintf("resources count: %d", c.resources.Len()))
+				c.log.Info(fmt.Sprintf("resources count: %d", c.resources.BlockingLen()))
 				var resSyncing []string
 				resSyncingList.Range(func(key, value interface{}) bool {
 					resSyncing = append(resSyncing, key.(string))
@@ -735,6 +740,7 @@ func (c *clusterCache) sync() error {
 					if un, ok := obj.(*unstructured.Unstructured); !ok {
 						return fmt.Errorf("object %s/%s has an unexpected type", un.GroupVersionKind().String(), un.GetName())
 					} else {
+						// FIXME time using 24.45
 						c.setNode(c.newResource(un))
 					}
 					resources = append(resources, &obj)
@@ -793,7 +799,6 @@ func (c *clusterCache) EnsureSynced() error {
 	}
 	err := c.sync()
 	syncTime := time.Now()
-	// TODO update syncStatus refactor to function
 	syncStatus.syncTime = &syncTime
 	syncStatus.syncError = err
 	return syncStatus.syncError
@@ -836,13 +841,13 @@ func (c *clusterCache) IterateHierarchy(key kube.ResourceKey, action func(resour
 	if !ok {
 		return
 	}
-	nsNodes, _ := c.nsIndex.Load(key.Namespace)
-	nsNodesAll := nsNodes.All()
+	nsNodesMap, _ := c.nsIndex.Load(key.Namespace)
+	nsNodesAll := nsNodesMap.BlockingAll()
 	if !action(res, nsNodesAll) {
 		return
 	}
 	childrenByUID := make(map[types.UID][]*Resource)
-	nsNodes.Range(func(_ kube.ResourceKey, child *Resource) bool {
+	nsNodesMap.Range(func(_ kube.ResourceKey, child *Resource) bool {
 		if res.isParentOf(child) {
 			childrenByUID[child.Ref.UID] = append(childrenByUID[child.Ref.UID], child)
 		}
@@ -995,13 +1000,14 @@ func (c *clusterCache) processEvent(event watch.EventType, un *unstructured.Unst
 
 // onNodeUpdated updates the cache with the new resource
 func (c *clusterCache) onNodeUpdated(oldRes *Resource, newRes *Resource) {
+	// FIXME time using
 	c.setNode(newRes)
 	for _, h := range c.getResourceUpdatedHandlers() {
 		res, ok := c.nsIndex.Load(newRes.Ref.Namespace)
 		if !ok {
 			continue
 		}
-		h(newRes, oldRes, res.All())
+		h(newRes, oldRes, res.BlockingAll())
 	}
 }
 
@@ -1014,7 +1020,9 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 		// all resources in namespace
 		if ok {
 			ns.Delete(key)
-			if ns.Len() == 0 {
+			// TODO ignore delete index after all res removed
+			// BlockingLen is high cost
+			if ns.BlockingLen() == 0 {
 				c.nsIndex.Delete(key.Namespace)
 			}
 			// remove ownership references from children with inferred references
@@ -1028,7 +1036,7 @@ func (c *clusterCache) onNodeRemoved(key kube.ResourceKey) {
 			}
 		}
 		if len(c.getResourceUpdatedHandlers()) > 0 {
-			nsAll := ns.All()
+			nsAll := ns.BlockingAll()
 			for _, h := range c.getResourceUpdatedHandlers() {
 				h(nil, existing, nsAll)
 			}
@@ -1050,26 +1058,26 @@ func (c *clusterCache) GetClusterInfo() ClusterInfo {
 	defer c.syncStatus.lock.Unlock()
 
 	return ClusterInfo{
-		APIsCount:         c.apisMeta.Len(),
+		APIsCount:         c.apisMeta.BlockingLen(),
 		K8SVersion:        c.serverVersion,
-		ResourcesCount:    c.resources.Len(),
+		ResourcesCount:    c.resources.BlockingLen(),
 		Server:            c.config.Host,
 		LastCacheSyncTime: c.syncStatus.syncTime,
 		SyncError:         c.syncStatus.syncError,
-		APIGroups:         c.apiGroups.GetReferrerList(), // TODO using snapshots, references cause leaks
+		APIGroups:         c.apiGroups.GetInnerList(), // TODO using snapshots, references cause leaks
 	}
 }
 
 // GetClusterInfoSnapshot returns cluster cache statistics
 func (c *clusterCache) GetClusterInfoSnapshot() ClusterInfo {
 	return ClusterInfo{
-		APIsCount:         c.apisMeta.Len(),
+		APIsCount:         c.apisMeta.BlockingLen(),
 		K8SVersion:        c.serverVersion,
-		ResourcesCount:    c.resources.Len(),
+		ResourcesCount:    c.resources.BlockingLen(),
 		Server:            c.config.Host,
 		LastCacheSyncTime: c.syncStatus.syncTime,
 		SyncError:         c.syncStatus.syncError,
-		APIGroups:         c.apiGroups.GetReferrerList(), // TODO using snapshots, references cause leaks
+		APIGroups:         c.apiGroups.GetInnerList(), // TODO using snapshots, references cause leaks
 	}
 }
 
