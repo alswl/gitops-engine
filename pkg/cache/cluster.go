@@ -282,27 +282,14 @@ func (c *clusterCache) replaceResourceCache(gk schema.GroupKind, resources []*Re
 	// update existing nodes
 	for i := range resources {
 		res := resources[i]
-		// FIXME diff with original
-		//oldRes, _ := c.resources.Load(res.ResourceKey())
-		oldRes, loaded := c.resources.LoadOrStore(res.ResourceKey(), res)
-		if !loaded {
-			continue
-		}
+		oldRes, _ := c.resources.Load(res.ResourceKey())
 		if oldRes == nil || oldRes.ResourceVersion != res.ResourceVersion {
 			c.onNodeUpdated(oldRes, res)
 		}
 	}
 	var foundObjs []kube.ResourceKey
-	// FIXME diff with original
-	var resourcesMap *ResourceMap
-	if ns == "" {
-		resourcesMap = &c.resources
-	} else {
-		nsRes, _ := c.nsIndex.LoadOrStore(ns, &ResourceMap{})
-		resourcesMap = nsRes
-	}
 	// FIXME time using 3.53s
-	resourcesMap.Range(func(key kube.ResourceKey, _ *Resource) bool {
+	c.resources.Range(func(key kube.ResourceKey, _ *Resource) bool {
 		if key.Kind != gk.Kind || key.Group != gk.Group || ns != "" && key.Namespace != ns {
 			return true
 		}
@@ -322,7 +309,6 @@ func (c *clusterCache) newResource(un *unstructured.Unstructured) *Resource {
 
 	cacheManifest := false
 	var info interface{}
-	// TODO handler should decoupling from newResource, using events
 	if c.populateResourceInfoHandler != nil {
 		info, cacheManifest = c.populateResourceInfoHandler(un, len(ownerRefs) == 0)
 	}
@@ -375,7 +361,6 @@ func (c *clusterCache) Invalidate(opts ...UpdateSettingsFunc) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	// TODO update syncStatus refactor to function
 	c.syncStatus.lock.Lock()
 	c.syncStatus.syncTime = nil
 	c.syncStatus.lock.Unlock()
