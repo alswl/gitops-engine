@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -767,6 +768,22 @@ func testDeploy() *appsv1.Deployment {
 	}
 }
 
+func testCM() *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "configmap-hostname",
+			Namespace:         "default",
+			UID:               "1",
+			ResourceVersion:   "123",
+			CreationTimestamp: metav1.NewTime(testCreationTime),
+		},
+	}
+}
+
 func TestIterateHierachy(t *testing.T) {
 	cluster := newCluster(t, testPod(), testRS(), testDeploy())
 	err := cluster.EnsureSynced()
@@ -830,4 +847,61 @@ func TestIterateHierachy(t *testing.T) {
 			},
 			keys)
 	})
+}
+
+func TestWatchEventNoReousrceTimeout(t *testing.T) {
+	info := kube.APIResourceInfo{
+		GroupKind:            schema.GroupKind{Group: "", Kind: "ConfigMap"},
+		GroupVersionResource: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"},
+		Meta:                 metav1.APIResource{Namespaced: true},
+	}
+	gvr := schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "configmaps",
+	}
+	dynamicClient := fake.NewSimpleDynamicClient(scheme.Scheme)
+	cmClient := dynamicClient.Resource(gvr)
+	cluster := NewClusterCache(
+		&rest.Config{Host: "https://test"}, SetKubectl(&kubetest.MockKubectlCmd{APIResources: []kube.APIResourceInfo{}, DynamicClient: dynamicClient}))
+	t.Cleanup(func() {
+		cluster.Invalidate()
+	})
+	cluster.syncStatus.watchResyncTimeout = 100 * time.Millisecond
+
+	err := cluster.EnsureSynced()
+	require.NoError(t, err)
+	ctx, cancelFn := context.WithCancel(context.Background())
+	t.Cleanup(cancelFn)
+
+	list, err := cmClient.Namespace("default").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 0)
+
+	go cluster.watchEvents(ctx, info, cmClient, "default", "")
+	// wait first watch done, it will not watch because no resource
+	time.Sleep(500 * time.Millisecond)
+
+	// add a resource
+	added := testCM()
+	added.SetName(added.GetName() + "-new-cm")
+	dynamicClient.PrependReactor("list", "configmaps", func(action testcore.Action) (handled bool, ret runtime.Object, err error) {
+		return true, &corev1.ConfigMapList{Items: []corev1.ConfigMap{*added}}, nil
+	})
+	list, err = cmClient.Namespace("default").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	time.Sleep(1000 * time.Millisecond)
+
+	// now resync should work, and watch will get the resource
+	var keys []kube.ResourceKey
+	cluster.IterateHierarchy(kube.GetResourceKey(mustToUnstructured(added)), func(child *Resource, _ map[kube.ResourceKey]*Resource) bool {
+		keys = append(keys, child.ResourceKey())
+		return true
+	})
+	assert.ElementsMatch(t,
+		[]kube.ResourceKey{
+			kube.GetResourceKey(mustToUnstructured(added)),
+		},
+		keys)
 }

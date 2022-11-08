@@ -471,12 +471,13 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 			// only watch when resources in ns
 			// otherwise will recheck after watchResyncTimeout
 			if !hasResourceInNs {
-				ticker := time.NewTicker(watchResyncTimeout)
+				ticker := time.NewTicker(c.syncStatus.watchResyncTimeout)
 				select {
+				// stop watching when parent context got cancelled
 				case <-ctx.Done():
 					return nil
 				case <-ticker.C:
-					return nil
+					return fmt.Errorf("resyncing %s on %s during no-reousrce timeout", api.GroupKind, c.config.Host)
 				}
 			}
 		}
