@@ -739,10 +739,8 @@ func (c *clusterCache) sync() error {
 
 			// only watch when resources in ns
 			// otherwise will recheck after cluster cache resync
-			if len(resources) > 0 {
-				go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
-				atomic.AddInt32(&watchedCount, 1)
-			}
+			go c.watchEvents(ctx, api, resClient, ns, resourceVersion)
+			atomic.AddInt32(&watchedCount, 1)
 			return nil
 		})
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -849,7 +850,7 @@ func TestIterateHierachy(t *testing.T) {
 	})
 }
 
-func TestWatchEventNoReousrceTimeout(t *testing.T) {
+func TestWatchEventNoResourceTimeout(t *testing.T) {
 	info := kube.APIResourceInfo{
 		GroupKind:            schema.GroupKind{Group: "", Kind: "ConfigMap"},
 		GroupVersionResource: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"},
@@ -868,6 +869,7 @@ func TestWatchEventNoReousrceTimeout(t *testing.T) {
 		cluster.Invalidate()
 	})
 	cluster.syncStatus.watchResyncTimeout = 100 * time.Millisecond
+	lock := sync.Mutex{}
 
 	err := cluster.EnsureSynced()
 	require.NoError(t, err)
@@ -878,16 +880,26 @@ func TestWatchEventNoReousrceTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Items, 0)
 
+	// add a resource
+	added := testCM()
+	added.SetName(added.GetName() + "-new-cm")
+	cmList := corev1.ConfigMapList{Items: []corev1.ConfigMap{}}
+	dynamicClient.PrependReactor("list", "configmaps", func(action testcore.Action) (handled bool, ret runtime.Object, err error) {
+		lock.Lock()
+		defer lock.Unlock()
+		// deep copy avoid race
+		newList := cmList.DeepCopy()
+		return true, newList, nil
+	})
+
 	go cluster.watchEvents(ctx, info, cmClient, "default", "")
 	// wait first watch done, it will not watch because no resource
 	time.Sleep(500 * time.Millisecond)
 
-	// add a resource
-	added := testCM()
-	added.SetName(added.GetName() + "-new-cm")
-	dynamicClient.PrependReactor("list", "configmaps", func(action testcore.Action) (handled bool, ret runtime.Object, err error) {
-		return true, &corev1.ConfigMapList{Items: []corev1.ConfigMap{*added}}, nil
-	})
+	// update cm list
+	lock.Lock()
+	cmList.Items = append(cmList.Items, *added)
+	lock.Unlock()
 	list, err = cmClient.Namespace("default").List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
 	require.Len(t, list.Items, 1)
