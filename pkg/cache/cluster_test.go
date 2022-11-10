@@ -868,7 +868,7 @@ func TestWatchEventNoResourceTimeout(t *testing.T) {
 	t.Cleanup(func() {
 		cluster.Invalidate()
 	})
-	cluster.syncStatus.watchResyncTimeout = 100 * time.Millisecond
+	cluster.syncStatus.watchNoResourceResyncTimeout = 100 * time.Millisecond
 	lock := sync.Mutex{}
 
 	err := cluster.EnsureSynced()
