@@ -468,7 +468,7 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 		if defaultSkipWatchEmptyResource {
 			hasResourceInNs := false
 			_, _ = c.listResources(ctx, resClient, func(listPager *pager.ListPager) error {
-				_ = listPager.EachListItem(ctx, metav1.ListOptions{ResourceVersion: resourceVersion}, func(obj runtime.Object) error {
+				_ = listPager.EachListItem(ctx, metav1.ListOptions{}, func(obj runtime.Object) error {
 					hasResourceInNs = true
 					return fmt.Errorf("only get first resource")
 				})
@@ -478,13 +478,13 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 			// only watch when resources in ns
 			// otherwise will recheck after watchResyncTimeout
 			if !hasResourceInNs {
-				c.log.V(1).Info(fmt.Sprintf("skip watch %s in ns %s on %s, retry after %s", api.GroupKind, ns, c.config.Host, watchResyncTimeout))
-				ticker := time.NewTicker(c.syncStatus.watchNoResourceResyncTimeout)
+				c.log.V(1).Info(fmt.Sprintf("skip watch %s in ns %s on %s, retry after %s", api.GroupKind, ns, c.config.Host, c.syncStatus.watchNoResourceResyncTimeout))
+				timer := time.NewTimer(c.syncStatus.watchNoResourceResyncTimeout)
 				select {
 				// stop watching when parent context got cancelled
 				case <-ctx.Done():
 					return nil
-				case <-ticker.C:
+				case <-timer.C:
 					return fmt.Errorf("resyncing %s on %s during no-reousrce timeout", api.GroupKind, c.config.Host)
 				}
 			}
