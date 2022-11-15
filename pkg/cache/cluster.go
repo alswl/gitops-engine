@@ -460,6 +460,10 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 				err = fmt.Errorf("Recovered from panic: %+v\n%s", r, debug.Stack())
 			}
 		}()
+		defer func() {
+			// when start new retry, we need to make rv blank
+			resourceVersion = ""
+		}()
 
 		if defaultSkipWatchEmptyResource {
 			hasResourceInNs := false
@@ -481,7 +485,6 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 				case <-ctx.Done():
 					return nil
 				case <-ticker.C:
-					resourceVersion = ""
 					return fmt.Errorf("resyncing %s on %s during no-reousrce timeout", api.GroupKind, c.config.Host)
 				}
 			}
