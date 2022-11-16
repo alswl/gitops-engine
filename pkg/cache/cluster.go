@@ -479,12 +479,13 @@ func (c *clusterCache) watchEvents(ctx context.Context, api kube.APIResourceInfo
 			// otherwise will recheck after watchResyncTimeout
 			if !hasResourceInNs {
 				c.log.V(1).Info(fmt.Sprintf("skip watch %s in ns %s on %s, retry after %s", api.GroupKind, ns, c.config.Host, c.syncStatus.watchNoResourceResyncTimeout))
-				timer := time.NewTimer(c.syncStatus.watchNoResourceResyncTimeout)
+				shouldReSyncNoRes := time.NewTimer(c.syncStatus.watchNoResourceResyncTimeout)
+				defer shouldReSyncNoRes.Stop()
 				select {
 				// stop watching when parent context got cancelled
 				case <-ctx.Done():
 					return nil
-				case <-timer.C:
+				case <-shouldReSyncNoRes.C:
 					return fmt.Errorf("resyncing %s on %s during no-reousrce timeout", api.GroupKind, c.config.Host)
 				}
 			}
@@ -688,6 +689,7 @@ func (c *clusterCache) sync() error {
 	// observation
 	watchedCount := int32(0)
 	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	quit := make(chan struct{})
 	go func() {
 		for {
@@ -703,7 +705,6 @@ func (c *clusterCache) sync() error {
 				})
 				c.log.Info(fmt.Sprintf("resSyncing: %v", strings.Join(resSyncing, ", ")))
 			case <-quit:
-				ticker.Stop()
 				return
 			}
 		}
